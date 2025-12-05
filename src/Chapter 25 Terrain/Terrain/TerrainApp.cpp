@@ -24,7 +24,7 @@ using namespace DirectX::PackedVector;
 const int gNumFrameResources = 3;
 
 // Bounding box for frustum culling
-struct BoundingBox
+struct TerrainBoundingBox
 {
     XMFLOAT3 Center;
     XMFLOAT3 Extents;
@@ -63,7 +63,7 @@ private:
     
     // LOD and Culling
     int CalculateLOD(float distance);
-    bool IsInFrustum(const BoundingBox& box, const XMFLOAT4* planes);
+    bool IsInFrustum(const TerrainBoundingBox& box, const XMFLOAT4* planes);
     void ExtractFrustumPlanes(XMFLOAT4* planes, const XMMATRIX& viewProj);
     void PrintDebugInfo();
 
@@ -84,7 +84,7 @@ private:
 
     // Terrain
     std::unique_ptr<Terrain> mTerrain;
-    BoundingBox mTerrainBounds;
+    TerrainBoundingBox mTerrainBounds;
     
     // Textures
     ComPtr<ID3D12Resource> mHeightmapTexture;
@@ -254,7 +254,7 @@ int TerrainApp::CalculateLOD(float distance)
     return 4; // Lowest detail
 }
 
-bool TerrainApp::IsInFrustum(const BoundingBox& box, const XMFLOAT4* planes)
+bool TerrainApp::IsInFrustum(const TerrainBoundingBox& box, const XMFLOAT4* planes)
 {
     for (int i = 0; i < 6; ++i)
     {
