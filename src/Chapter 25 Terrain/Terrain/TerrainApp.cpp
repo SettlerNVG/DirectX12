@@ -11,6 +11,7 @@
 #include "FrameResource.h"
 #include "QuadTree.h"
 #include "Terrain.h"
+#include <sstream>
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -60,9 +61,10 @@ private:
     void BuildPSOs();
     void BuildFrameResources();
     void BuildMaterials();
+    void DrawTerrain();
     
     void ExtractFrustumPlanes(XMFLOAT4* planes, const XMMATRIX& viewProj);
-    void DrawTerrain();
+    void PrintDebugInfo();
 
     std::array<const CD3DX12_STATIC_SAMPLER_DESC, 2> GetStaticSamplers();
 
@@ -103,9 +105,17 @@ private:
     PassConstants mMainPassCB;
     TerrainConstants mTerrainCB;
     Camera mCamera;
+    
+    // Frustum planes for culling
+    XMFLOAT4 mFrustumPlanes[6];
 
     bool mWireframe = false;
-    bool mShowLODColors = false;
+    
+    // Debug statistics
+    int mVisibleNodes = 0;
+    int mCulledNodes = 0;
+    int mLodCounts[5] = {0, 0, 0, 0, 0};
+    float mDebugTimer = 0.0f;
     
     POINT mLastMousePos;
 };
@@ -148,29 +158,31 @@ bool TerrainApp::Initialize()
 
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
-    mCamera.SetPosition(0.0f, 150.0f, -200.0f);
+    mCamera.SetPosition(0.0f, 200.0f, -300.0f);
     mCamera.LookAt(mCamera.GetPosition3f(), XMFLOAT3(0, 0, 0), XMFLOAT3(0, 1, 0));
 
-    // Create terrain - will use DDS heightmap from TerrainDetails/003
-    // Terrain size 512 units, height range 0-150
+    // Create terrain - 512x512 units, height 0-150
     mTerrain = std::make_unique<Terrain>(md3dDevice.Get(), mCommandList.Get(), 
                                           512.0f, 0.0f, 150.0f);
     
     // Try to load heightmap from DDS, fallback to procedural
     if (!mTerrain->LoadHeightmapDDS(L"TerrainDetails/003/Height_Out.dds", md3dDevice.Get(), mCommandList.Get()))
     {
-        // Fallback: generate procedural heightmap
-        mTerrain->GenerateProceduralHeightmap(512, 512, 4.0f, 6);
+        mTerrain->GenerateProceduralHeightmap(256, 256, 4.0f, 6);
     }
     mTerrain->BuildGeometry(md3dDevice.Get(), mCommandList.Get());
 
-    // Initialize QuadTree for LOD
+    // Initialize QuadTree for LOD management
     mQuadTree = std::make_unique<QuadTree>();
-    mQuadTree->Initialize(512.0f, 32.0f, 5); // 512 terrain size, 32 min node, 5 LOD levels
+    mQuadTree->Initialize(512.0f, 32.0f, 5); // terrain size, min node size, max LOD levels
     
-    // Set LOD distances for smooth transitions
-    std::vector<float> lodDistances = { 64.0f, 128.0f, 256.0f, 512.0f, 1024.0f };
+    // Set LOD distances
+    std::vector<float> lodDistances = { 100.0f, 200.0f, 400.0f, 800.0f, 1600.0f };
     mQuadTree->SetLODDistances(lodDistances);
+    
+    OutputDebugStringA("=== Terrain Demo Initialized ===\n");
+    OutputDebugStringA("QuadTree LOD + Frustum Culling enabled\n");
+    OutputDebugStringA("Controls: WASD - move, QE - up/down, Mouse - look, 1 - wireframe\n\n");
 
     BuildRootSignature();
     BuildDescriptorHeaps();
@@ -193,7 +205,6 @@ void TerrainApp::OnResize()
     mCamera.SetLens(0.25f * MathHelper::Pi, AspectRatio(), 1.0f, 2000.0f);
 }
 
-
 void TerrainApp::Update(const GameTimer& gt)
 {
     OnKeyboardInput(gt);
@@ -214,17 +225,56 @@ void TerrainApp::Update(const GameTimer& gt)
     XMMATRIX view = mCamera.GetView();
     XMMATRIX proj = mCamera.GetProj();
     XMMATRIX viewProj = XMMatrixMultiply(view, proj);
-    
-    XMFLOAT4 frustumPlanes[6];
-    ExtractFrustumPlanes(frustumPlanes, viewProj);
+    ExtractFrustumPlanes(mFrustumPlanes, viewProj);
     
     // Update QuadTree with camera position and frustum
-    mQuadTree->Update(mCamera.GetPosition3f(), frustumPlanes);
+    mQuadTree->Update(mCamera.GetPosition3f(), mFrustumPlanes);
 
     UpdateObjectCBs(gt);
     UpdateMainPassCB(gt);
     UpdateTerrainCB(gt);
     UpdateMaterialBuffer(gt);
+    
+    // Print debug info every 0.5 seconds
+    mDebugTimer += gt.DeltaTime();
+    if (mDebugTimer >= 0.5f)
+    {
+        PrintDebugInfo();
+        mDebugTimer = 0.0f;
+    }
+}
+
+void TerrainApp::PrintDebugInfo()
+{
+    // Count nodes by LOD level
+    memset(mLodCounts, 0, sizeof(mLodCounts));
+    
+    std::vector<TerrainNode*> visibleNodes;
+    mQuadTree->GetVisibleNodes(visibleNodes);
+    
+    mVisibleNodes = (int)visibleNodes.size();
+    mCulledNodes = mQuadTree->GetTotalNodeCount() - mVisibleNodes;
+    
+    for (auto* node : visibleNodes)
+    {
+        if (node->LODLevel >= 0 && node->LODLevel < 5)
+            mLodCounts[node->LODLevel]++;
+    }
+    
+    std::ostringstream oss;
+    oss << "=== QuadTree LOD & Frustum Culling Stats ===\n";
+    oss << "Visible nodes: " << mVisibleNodes << " / " << mQuadTree->GetTotalNodeCount() << "\n";
+    oss << "Culled nodes: " << mCulledNodes << " (Frustum Culling)\n";
+    oss << "LOD distribution: ";
+    oss << "LOD0=" << mLodCounts[0] << " ";
+    oss << "LOD1=" << mLodCounts[1] << " ";
+    oss << "LOD2=" << mLodCounts[2] << " ";
+    oss << "LOD3=" << mLodCounts[3] << " ";
+    oss << "LOD4=" << mLodCounts[4] << "\n";
+    oss << "Camera: (" << mCamera.GetPosition3f().x << ", " 
+        << mCamera.GetPosition3f().y << ", " << mCamera.GetPosition3f().z << ")\n\n";
+    
+    OutputDebugStringA(oss.str().c_str());
 }
 
 void TerrainApp::Draw(const GameTimer& gt)
@@ -258,19 +308,15 @@ void TerrainApp::Draw(const GameTimer& gt)
 
     mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
-    // Set pass constants
     auto passCB = mCurrFrameResource->PassCB->Resource();
     mCommandList->SetGraphicsRootConstantBufferView(1, passCB->GetGPUVirtualAddress());
 
-    // Set terrain constants
     auto terrainCB = mCurrFrameResource->TerrainCB->Resource();
     mCommandList->SetGraphicsRootConstantBufferView(2, terrainCB->GetGPUVirtualAddress());
 
-    // Set textures
     CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     mCommandList->SetGraphicsRootDescriptorTable(3, texHandle);
 
-    // Draw terrain
     DrawTerrain();
 
     mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
@@ -296,7 +342,7 @@ void TerrainApp::DrawTerrain()
     mCommandList->IASetIndexBuffer(&geo->IndexBufferView());
     mCommandList->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    // Get visible nodes from QuadTree
+    // Get visible nodes from QuadTree (after frustum culling)
     std::vector<TerrainNode*> visibleNodes;
     mQuadTree->GetVisibleNodes(visibleNodes);
 
@@ -305,12 +351,12 @@ void TerrainApp::DrawTerrain()
 
     for (auto* node : visibleNodes)
     {
-        // Set object constants
+        // Set object constants for this node
         D3D12_GPU_VIRTUAL_ADDRESS objCBAddress = objectCB->GetGPUVirtualAddress() + 
                                                   node->ObjectCBIndex * objCBByteSize;
         mCommandList->SetGraphicsRootConstantBufferView(0, objCBAddress);
 
-        // Select LOD mesh
+        // Select LOD mesh based on node's LOD level
         const char* lodMesh = Terrain::GetLODMeshName(node->LODLevel);
         auto& submesh = geo->DrawArgs[lodMesh];
 
@@ -318,6 +364,7 @@ void TerrainApp::DrawTerrain()
             submesh.StartIndexLocation, submesh.BaseVertexLocation, 0);
     }
 }
+
 
 void TerrainApp::OnMouseDown(WPARAM btnState, int x, int y)
 {
@@ -347,7 +394,7 @@ void TerrainApp::OnMouseMove(WPARAM btnState, int x, int y)
 void TerrainApp::OnKeyboardInput(const GameTimer& gt)
 {
     const float dt = gt.DeltaTime();
-    float speed = 50.0f;
+    float speed = 100.0f;
 
     if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
         speed *= 3.0f;
@@ -365,11 +412,16 @@ void TerrainApp::OnKeyboardInput(const GameTimer& gt)
     if (GetAsyncKeyState('E') & 0x8000)
         mCamera.SetPosition(mCamera.GetPosition3f().x, mCamera.GetPosition3f().y - speed * dt, mCamera.GetPosition3f().z);
 
-    // Toggle wireframe
+    // Toggle wireframe with '1' key
     static bool wKeyPressed = false;
     if (GetAsyncKeyState('1') & 0x8000)
     {
-        if (!wKeyPressed) { mWireframe = !mWireframe; wKeyPressed = true; }
+        if (!wKeyPressed) 
+        { 
+            mWireframe = !mWireframe; 
+            wKeyPressed = true;
+            OutputDebugStringA(mWireframe ? "Wireframe: ON\n" : "Wireframe: OFF\n");
+        }
     }
     else { wKeyPressed = false; }
 }
@@ -378,7 +430,6 @@ void TerrainApp::UpdateCamera(const GameTimer& gt)
 {
     mCamera.UpdateViewMatrix();
 }
-
 
 void TerrainApp::UpdateObjectCBs(const GameTimer& gt)
 {
@@ -389,7 +440,7 @@ void TerrainApp::UpdateObjectCBs(const GameTimer& gt)
 
     for (auto* node : visibleNodes)
     {
-        // Create world matrix for this terrain tile
+        // World matrix: scale and translate the unit tile to world position
         XMMATRIX scale = XMMatrixScaling(node->Size, 1.0f, node->Size);
         XMMATRIX translation = XMMatrixTranslation(node->X, 0.0f, node->Z);
         XMMATRIX world = scale * translation;
@@ -397,16 +448,15 @@ void TerrainApp::UpdateObjectCBs(const GameTimer& gt)
         ObjectConstants objConstants;
         XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
         
-        // Texture transform maps [0,1] to heightmap region
+        // Texture transform: map UV to correct heightmap region
         float halfTerrain = mTerrain->GetTerrainSize() * 0.5f;
         float u0 = (node->X - node->Size * 0.5f + halfTerrain) / mTerrain->GetTerrainSize();
         float v0 = (node->Z - node->Size * 0.5f + halfTerrain) / mTerrain->GetTerrainSize();
         float uScale = node->Size / mTerrain->GetTerrainSize();
         float vScale = node->Size / mTerrain->GetTerrainSize();
         
-        XMMATRIX texScale = XMMatrixScaling(uScale, vScale, 1.0f);
-        XMMATRIX texTrans = XMMatrixTranslation(u0, v0, 0.0f);
-        XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texScale * texTrans));
+        XMMATRIX texTransform = XMMatrixScaling(uScale, vScale, 1.0f) * XMMatrixTranslation(u0, v0, 0.0f);
+        XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
         
         objConstants.MaterialIndex = 0;
         objConstants.LODLevel = node->LODLevel;
@@ -443,9 +493,6 @@ void TerrainApp::UpdateMainPassCB(const GameTimer& gt)
     // Directional light (sun)
     mMainPassCB.Lights[0].Direction = { 0.57735f, -0.57735f, 0.57735f };
     mMainPassCB.Lights[0].Strength = { 0.9f, 0.85f, 0.8f };
-
-    // Extract frustum planes
-    ExtractFrustumPlanes(mMainPassCB.FrustumPlanes, viewProj);
 
     auto currPassCB = mCurrFrameResource->PassCB.get();
     currPassCB->CopyData(0, mMainPassCB);
@@ -535,11 +582,10 @@ void TerrainApp::ExtractFrustumPlanes(XMFLOAT4* planes, const XMMATRIX& viewProj
     }
 }
 
-
 void TerrainApp::BuildRootSignature()
 {
     CD3DX12_DESCRIPTOR_RANGE texTable;
-    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0); // heightmap, diffuse, normal
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0);
 
     CD3DX12_ROOT_PARAMETER slotRootParameter[4];
     slotRootParameter[0].InitAsConstantBufferView(0); // Object CB
@@ -568,16 +614,15 @@ void TerrainApp::BuildRootSignature()
         IID_PPV_ARGS(mRootSignature.GetAddressOf())));
 }
 
+
 void TerrainApp::BuildDescriptorHeaps()
 {
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-    srvHeapDesc.NumDescriptors = 3; // heightmap, diffuse/weathering, normal
+    srvHeapDesc.NumDescriptors = 3;
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ThrowIfFailed(md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
 
-    // Load textures from TerrainDetails/003
-    
     // Load heightmap DDS
     HRESULT hr = DirectX::CreateDDSTextureFromFile12(
         md3dDevice.Get(), mCommandList.Get(), L"TerrainDetails/003/Height_Out.dds",
@@ -631,12 +676,12 @@ void TerrainApp::BuildDescriptorHeaps()
             mHeightmapTexture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
     }
     
-    // Load diffuse/weathering texture
+    // Load diffuse texture
     hr = DirectX::CreateDDSTextureFromFile12(
         md3dDevice.Get(), mCommandList.Get(), L"TerrainDetails/003/Weathering_Out.dds",
         mDiffuseTexture, mDiffuseUploadBuffer);
     
-    // Load normal map texture
+    // Load normal map
     hr = DirectX::CreateDDSTextureFromFile12(
         md3dDevice.Get(), mCommandList.Get(), L"TerrainDetails/003/Normals_Out.dds",
         mNormalTexture, mNormalUploadBuffer);
@@ -677,7 +722,6 @@ void TerrainApp::BuildDescriptorHeaps()
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = -1; // All mips
     srvDesc.Texture2D.MostDetailedMip = 0;
 
     // Heightmap SRV
