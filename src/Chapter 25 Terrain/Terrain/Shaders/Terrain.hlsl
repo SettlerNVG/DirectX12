@@ -135,8 +135,8 @@ VertexOut VS(VertexIn vin)
     // Transform to clip space
     vout.PosH = mul(posW, gViewProj);
     
-    // Detail texture UV - tile across terrain
-    vout.TexC = heightmapUV * 16.0;
+    // Texture UV - same as heightmap UV (covers entire terrain)
+    vout.TexC = heightmapUV;
     
     return vout;
 }

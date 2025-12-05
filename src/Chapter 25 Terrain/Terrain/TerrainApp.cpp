@@ -16,6 +16,25 @@
 #include "FrameResource.h"
 #include "Terrain.h"
 #include <sstream>
+#include <iostream>
+#include <iomanip>
+#include <cstdio>
+
+// Console for debug output
+void CreateConsoleWindow()
+{
+    AllocConsole();
+    FILE* fp;
+    freopen_s(&fp, "CONOUT$", "w", stdout);
+    freopen_s(&fp, "CONOUT$", "w", stderr);
+    std::cout.clear();
+    std::cerr.clear();
+    SetConsoleTitleA("Terrain Debug Console");
+    std::cout << "=== Terrain Demo - Debug Console ===" << std::endl;
+    std::cout << "LOD + Frustum Culling enabled" << std::endl;
+    std::cout << "Controls: WASD-move, QE-up/down, Mouse-look, 1-wireframe" << std::endl;
+    std::cout << "=========================================\n" << std::endl;
+}
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -122,6 +141,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance, PSTR cmdLine, in
 #if defined(DEBUG) | defined(_DEBUG)
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif
+
+    // Create console window for debug output
+    CreateConsoleWindow();
 
     try
     {
@@ -297,14 +319,15 @@ void TerrainApp::ExtractFrustumPlanes(XMFLOAT4* planes, const XMMATRIX& viewProj
 
 void TerrainApp::PrintDebugInfo()
 {
-    std::ostringstream oss;
-    oss << "=== Terrain LOD & Frustum Culling ===\n";
-    oss << "Terrain visible: " << (mTerrainVisible ? "YES" : "NO (CULLED)") << "\n";
-    oss << "Current LOD: " << mCurrentLOD << " (0=highest, 4=lowest)\n";
-    oss << "Camera: (" << mCamera.GetPosition3f().x << ", " 
-        << mCamera.GetPosition3f().y << ", " << mCamera.GetPosition3f().z << ")\n\n";
-    
-    OutputDebugStringA(oss.str().c_str());
+    // Output to console window
+    std::cout << "--- Terrain Status ---" << std::endl;
+    std::cout << "Visible: " << (mTerrainVisible ? "YES" : "NO (CULLED)") << std::endl;
+    std::cout << "LOD Level: " << mCurrentLOD << " (0=high detail, 4=low)" << std::endl;
+    std::cout << "Camera: (" << std::fixed << std::setprecision(1) 
+              << mCamera.GetPosition3f().x << ", " 
+              << mCamera.GetPosition3f().y << ", " 
+              << mCamera.GetPosition3f().z << ")" << std::endl;
+    std::cout << std::endl;
 }
 
 void TerrainApp::Draw(const GameTimer& gt)
