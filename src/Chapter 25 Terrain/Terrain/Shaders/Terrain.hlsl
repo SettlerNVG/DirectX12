@@ -1,10 +1,6 @@
 //***************************************************************************************
-// Terrain.hlsl - Terrain rendering shader with heightmap displacement
+// Terrain.hlsl - Terrain rendering with heightmap displacement
 //***************************************************************************************
-
-#ifndef NUM_DIR_LIGHTS
-    #define NUM_DIR_LIGHTS 1
-#endif
 
 struct Light
 {
@@ -79,13 +75,13 @@ struct VertexOut
     float3 PosW : POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD;
+    float2 HeightmapUV : TEXCOORD1;
     float Height : HEIGHT;
 };
 
-// Sample height from heightmap
+// Sample height from heightmap (UV in [0,1])
 float SampleHeight(float2 uv)
 {
-    // DDS heightmap may be in different formats, sample red channel
     float h = gHeightMap.SampleLevel(gsamLinearClamp, saturate(uv), 0).r;
     return gMinHeight + saturate(h) * (gMaxHeight - gMinHeight);
 }
@@ -102,7 +98,7 @@ float3 CalculateNormal(float2 uv)
     
     float3 normal;
     normal.x = hL - hR;
-    normal.y = 2.0 * gTerrainSize * texelSize.x;
+    normal.y = 2.0 * gTerrainSize / gHeightMapSize.x;
     normal.z = hD - hU;
     
     return normalize(normal);
@@ -112,97 +108,96 @@ VertexOut VS(VertexIn vin)
 {
     VertexOut vout;
     
-    // Transform local position to world space
-    float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
+    // vin.TexC is already [0,1] from mesh generation
+    // Use it directly for heightmap sampling
+    float2 heightmapUV = vin.TexC;
     
-    // Calculate UV for heightmap sampling
-    float2 uv = vin.TexC;
+    // Sample height
+    float height = SampleHeight(heightmapUV);
     
-    // Sample height and displace vertex
-    float height = SampleHeight(uv);
+    // Local position: mesh is [-0.5, 0.5], scale by world matrix
+    float3 posL = vin.PosL;
+    posL.y = 0; // Height will be set after world transform
+    
+    // Transform to world space
+    float4 posW = mul(float4(posL, 1.0f), gWorld);
+    
+    // Apply height in world space
     posW.y = height;
     
     vout.PosW = posW.xyz;
     vout.Height = height;
+    vout.HeightmapUV = heightmapUV;
     
     // Calculate normal from heightmap
-    vout.NormalW = CalculateNormal(uv);
+    vout.NormalW = CalculateNormal(heightmapUV);
     
-    // Transform to homogeneous clip space
+    // Transform to clip space
     vout.PosH = mul(posW, gViewProj);
     
-    // Output texture coordinates for detail texturing
-    vout.TexC = vin.TexC * 32.0; // Tile the texture
+    // Detail texture UV - tile across terrain
+    vout.TexC = heightmapUV * 16.0;
     
     return vout;
 }
 
 float4 PS(VertexOut pin) : SV_Target
 {
-    // Sample diffuse/weathering texture (from TerrainDetails)
+    // Sample textures
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamLinearWrap, pin.TexC);
-    
-    // Sample normal map if available
     float3 normalMapSample = gNormalMap.Sample(gsamLinearWrap, pin.TexC).rgb;
     
-    // Normalize interpolated normal
     float3 normal = normalize(pin.NormalW);
     
-    // If normal map is valid (not white), blend with calculated normal
+    // Blend normal map if valid
     if (length(normalMapSample - 0.5) > 0.01)
     {
         float3 normalFromMap = normalMapSample * 2.0 - 1.0;
-        normal = normalize(normal + normalFromMap * 0.5);
+        normal = normalize(normal + normalFromMap * 0.3);
     }
     
-    // Simple directional lighting
+    // Lighting
     float3 lightDir = normalize(-gLights[0].Direction);
     float NdotL = max(dot(normal, lightDir), 0.0);
     
-    // Ambient + diffuse
-    float3 ambient = gAmbientLight.rgb * 0.4;
+    float3 ambient = gAmbientLight.rgb * 0.5;
     float3 diffuse = gLights[0].Strength * NdotL;
     
-    // Height-based coloring (grass -> rock -> snow)
+    // Height-based terrain coloring
     float heightFactor = saturate((pin.Height - gMinHeight) / (gMaxHeight - gMinHeight));
-    
-    float3 grassColor = float3(0.25, 0.45, 0.15);
-    float3 rockColor = float3(0.45, 0.40, 0.35);
-    float3 snowColor = float3(0.95, 0.95, 0.98);
-    
-    // Slope-based blending (steeper = more rock)
     float slope = 1.0 - normal.y;
     
+    float3 grassColor = float3(0.3, 0.5, 0.2);
+    float3 rockColor = float3(0.5, 0.45, 0.4);
+    float3 snowColor = float3(0.95, 0.95, 0.98);
+    
     float3 terrainColor;
-    if (heightFactor < 0.3)
-        terrainColor = lerp(grassColor, rockColor, slope * 2.0);
-    else if (heightFactor < 0.6)
-        terrainColor = lerp(grassColor, rockColor, saturate(heightFactor * 2.0 + slope));
+    if (heightFactor < 0.4)
+        terrainColor = lerp(grassColor, rockColor, saturate(slope * 3.0));
+    else if (heightFactor < 0.7)
+        terrainColor = lerp(grassColor, rockColor, saturate(heightFactor + slope));
     else
-        terrainColor = lerp(rockColor, snowColor, saturate((heightFactor - 0.6) * 2.5));
+        terrainColor = lerp(rockColor, snowColor, saturate((heightFactor - 0.7) * 3.0));
     
-    // Blend terrain color with loaded texture
-    float3 finalColor;
-    if (diffuseAlbedo.a > 0.1) // If texture is valid
-        finalColor = lerp(terrainColor, diffuseAlbedo.rgb, 0.6);
-    else
-        finalColor = terrainColor;
+    // Blend with diffuse texture
+    float3 finalColor = terrainColor;
+    if (diffuseAlbedo.a > 0.1)
+        finalColor = lerp(terrainColor, diffuseAlbedo.rgb, 0.5);
     
-    finalColor = ambient * finalColor + diffuse * finalColor;
+    finalColor = (ambient + diffuse) * finalColor;
     
     return float4(finalColor, 1.0);
 }
 
-// Wireframe pixel shader for debugging
+// Wireframe shader - shows LOD level by color
 float4 PS_Wireframe(VertexOut pin) : SV_Target
 {
-    // Color by LOD level
     float3 lodColors[5] = { 
-        float3(1, 0, 0),    // LOD 0 - Red (highest detail)
+        float3(1, 0, 0),    // LOD 0 - Red
         float3(0, 1, 0),    // LOD 1 - Green
         float3(0, 0, 1),    // LOD 2 - Blue
         float3(1, 1, 0),    // LOD 3 - Yellow
-        float3(1, 0, 1)     // LOD 4 - Magenta (lowest detail)
+        float3(1, 0, 1)     // LOD 4 - Magenta
     };
     
     return float4(lodColors[gLODLevel % 5], 1.0);
