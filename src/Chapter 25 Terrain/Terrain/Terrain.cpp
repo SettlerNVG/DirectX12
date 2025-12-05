@@ -155,8 +155,8 @@ void Terrain::BuildGeometry(ID3D12Device* device, ID3D12GraphicsCommandList* cmd
     std::vector<TerrainVertex> allVertices;
     std::vector<std::uint32_t> allIndices;
     
-    // Build LOD meshes: LOD0=64x64, LOD1=32x32, LOD2=16x16, LOD3=8x8, LOD4=4x4
-    UINT lodSizes[] = { 64, 32, 16, 8, 4 };
+    // Build LOD meshes: LOD0=256x256, LOD1=128x128, LOD2=64x64, LOD3=32x32, LOD4=16x16
+    UINT lodSizes[] = { 256, 128, 64, 32, 16 };
     
     for (int lod = 0; lod < 5; ++lod)
     {

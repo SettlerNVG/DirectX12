@@ -75,11 +75,9 @@ struct VertexOut
     float3 PosW : POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD;
-    float2 HeightmapUV : TEXCOORD1;
-    float Height : HEIGHT;
 };
 
-// Sample height from heightmap (UV in [0,1])
+// Sample height from heightmap
 float SampleHeight(float2 uv)
 {
     float h = gHeightMap.SampleLevel(gsamLinearClamp, saturate(uv), 0).r;
@@ -108,83 +106,48 @@ VertexOut VS(VertexIn vin)
 {
     VertexOut vout;
     
-    // vin.TexC is already [0,1] from mesh generation
-    // Use it directly for heightmap sampling
-    float2 heightmapUV = vin.TexC;
+    // UV for heightmap and texture sampling
+    float2 uv = vin.TexC;
     
     // Sample height
-    float height = SampleHeight(heightmapUV);
+    float height = SampleHeight(uv);
     
-    // Local position: mesh is [-0.5, 0.5], scale by world matrix
+    // Local position
     float3 posL = vin.PosL;
-    posL.y = 0; // Height will be set after world transform
+    posL.y = 0;
     
     // Transform to world space
     float4 posW = mul(float4(posL, 1.0f), gWorld);
-    
-    // Apply height in world space
     posW.y = height;
     
     vout.PosW = posW.xyz;
-    vout.Height = height;
-    vout.HeightmapUV = heightmapUV;
-    
-    // Calculate normal from heightmap
-    vout.NormalW = CalculateNormal(heightmapUV);
-    
-    // Transform to clip space
+    vout.NormalW = CalculateNormal(uv);
     vout.PosH = mul(posW, gViewProj);
-    
-    // Texture UV - same as heightmap UV (covers entire terrain)
-    vout.TexC = heightmapUV;
+    vout.TexC = uv;
     
     return vout;
 }
 
 float4 PS(VertexOut pin) : SV_Target
 {
-    // Sample textures
-    float4 diffuseAlbedo = gDiffuseMap.Sample(gsamLinearWrap, pin.TexC);
-    float3 normalMapSample = gNormalMap.Sample(gsamLinearWrap, pin.TexC).rgb;
+    // Sample diffuse texture (Weathering_Out.dds)
+    float4 diffuseColor = gDiffuseMap.Sample(gsamLinearClamp, pin.TexC);
     
+    // Use texture color directly
+    float3 albedo = diffuseColor.rgb;
+    
+    // Normal from heightmap
     float3 normal = normalize(pin.NormalW);
     
-    // Blend normal map if valid
-    if (length(normalMapSample - 0.5) > 0.01)
-    {
-        float3 normalFromMap = normalMapSample * 2.0 - 1.0;
-        normal = normalize(normal + normalFromMap * 0.3);
-    }
-    
-    // Lighting
+    // Simple directional lighting
     float3 lightDir = normalize(-gLights[0].Direction);
     float NdotL = max(dot(normal, lightDir), 0.0);
     
-    float3 ambient = gAmbientLight.rgb * 0.5;
+    // Ambient and diffuse
+    float3 ambient = gAmbientLight.rgb * 0.4;
     float3 diffuse = gLights[0].Strength * NdotL;
     
-    // Height-based terrain coloring
-    float heightFactor = saturate((pin.Height - gMinHeight) / (gMaxHeight - gMinHeight));
-    float slope = 1.0 - normal.y;
-    
-    float3 grassColor = float3(0.3, 0.5, 0.2);
-    float3 rockColor = float3(0.5, 0.45, 0.4);
-    float3 snowColor = float3(0.95, 0.95, 0.98);
-    
-    float3 terrainColor;
-    if (heightFactor < 0.4)
-        terrainColor = lerp(grassColor, rockColor, saturate(slope * 3.0));
-    else if (heightFactor < 0.7)
-        terrainColor = lerp(grassColor, rockColor, saturate(heightFactor + slope));
-    else
-        terrainColor = lerp(rockColor, snowColor, saturate((heightFactor - 0.7) * 3.0));
-    
-    // Blend with diffuse texture
-    float3 finalColor = terrainColor;
-    if (diffuseAlbedo.a > 0.1)
-        finalColor = lerp(terrainColor, diffuseAlbedo.rgb, 0.5);
-    
-    finalColor = (ambient + diffuse) * finalColor;
+    float3 finalColor = (ambient + diffuse) * albedo;
     
     return float4(finalColor, 1.0);
 }
