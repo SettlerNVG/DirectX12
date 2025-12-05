@@ -106,13 +106,16 @@ VertexOut VS(VertexIn vin)
 {
     VertexOut vout;
     
-    // UV for heightmap and texture sampling
-    float2 uv = vin.TexC;
+    // Transform UV using texture transform (for QuadTree node UV mapping)
+    // gTexTransform contains scale and offset to map local UV to global terrain UV
+    float2 localUV = vin.TexC;
+    float4 transformedUV = mul(float4(localUV, 0.0f, 1.0f), gTexTransform);
+    float2 globalUV = transformedUV.xy;
     
-    // Sample height
-    float height = SampleHeight(uv);
+    // Sample height using global UV
+    float height = SampleHeight(globalUV);
     
-    // Local position
+    // Local position (mesh is centered at origin, unit size)
     float3 posL = vin.PosL;
     posL.y = 0;
     
@@ -121,9 +124,9 @@ VertexOut VS(VertexIn vin)
     posW.y = height;
     
     vout.PosW = posW.xyz;
-    vout.NormalW = CalculateNormal(uv);
+    vout.NormalW = CalculateNormal(globalUV);
     vout.PosH = mul(posW, gViewProj);
-    vout.TexC = uv;
+    vout.TexC = globalUV; // Use global UV for texture sampling
     
     return vout;
 }

@@ -15,6 +15,7 @@
 #include "../../Common/DDSTextureLoader.h"
 #include "FrameResource.h"
 #include "Terrain.h"
+#include "QuadTree.h"
 #include <sstream>
 #include <iostream>
 #include <iomanip>
@@ -105,6 +106,10 @@ private:
     std::unique_ptr<Terrain> mTerrain;
     TerrainBoundingBox mTerrainBounds;
     
+    // QuadTree for LOD management
+    std::unique_ptr<QuadTree> mQuadTree;
+    std::vector<TerrainNode*> mVisibleNodes;
+    
     // Textures
     ComPtr<ID3D12Resource> mHeightmapTexture;
     ComPtr<ID3D12Resource> mHeightmapUploadBuffer;
@@ -127,8 +132,12 @@ private:
     bool mTerrainVisible = true;
     bool mWireframe = false;
     
-    // LOD distances
-    float mLodDistances[5] = { 150.0f, 300.0f, 500.0f, 800.0f, 1200.0f };
+    // LOD distances for QuadTree
+    std::vector<float> mLodDistances = { 100.0f, 200.0f, 400.0f, 600.0f, 1000.0f };
+    
+    // Statistics
+    int mLodCounts[5] = { 0, 0, 0, 0, 0 };
+    int mCulledNodes = 0;
     
     // Debug
     float mDebugTimer = 0.0f;
@@ -196,8 +205,22 @@ bool TerrainApp::Initialize()
     mTerrainBounds.Center = XMFLOAT3(0.0f, mTerrain->GetMinHeight() + halfHeight, 0.0f);
     mTerrainBounds.Extents = XMFLOAT3(halfSize, halfHeight + 10.0f, halfSize);
     
+    // Initialize QuadTree for LOD management
+    mQuadTree = std::make_unique<QuadTree>();
+    float minNodeSize = mTerrain->GetTerrainSize() / 8.0f; // Minimum node = 1/8 of terrain
+    mQuadTree->SetLODDistances(mLodDistances);
+    mQuadTree->Initialize(mTerrain->GetTerrainSize(), minNodeSize, 5);
+    mQuadTree->SetHeightRange(0, 0, mTerrain->GetTerrainSize(), 
+                              mTerrain->GetMinHeight(), mTerrain->GetMaxHeight());
+    
+    std::cout << "QuadTree initialized:" << std::endl;
+    std::cout << "  Terrain size: " << mTerrain->GetTerrainSize() << std::endl;
+    std::cout << "  Min node size: " << minNodeSize << std::endl;
+    std::cout << "  Total nodes: " << mQuadTree->GetTotalNodeCount() << std::endl;
+    std::cout << std::endl;
+    
     OutputDebugStringA("=== Terrain Demo ===\n");
-    OutputDebugStringA("Single terrain with LOD + Frustum Culling\n");
+    OutputDebugStringA("QuadTree LOD + Frustum Culling\n");
     OutputDebugStringA("Controls: WASD-move, QE-up/down, Mouse-look, 1-wireframe\n\n");
 
     BuildRootSignature();
@@ -242,16 +265,25 @@ void TerrainApp::Update(const GameTimer& gt)
     XMMATRIX viewProj = XMMatrixMultiply(view, proj);
     ExtractFrustumPlanes(mFrustumPlanes, viewProj);
     
-    // Frustum culling - check if terrain is visible
-    mTerrainVisible = IsInFrustum(mTerrainBounds, mFrustumPlanes);
-    
-    // Calculate LOD based on distance to terrain center
+    // Update QuadTree with camera position and frustum
     XMFLOAT3 camPos = mCamera.GetPosition3f();
-    float dx = camPos.x - mTerrainBounds.Center.x;
-    float dy = camPos.y - mTerrainBounds.Center.y;
-    float dz = camPos.z - mTerrainBounds.Center.z;
-    float distance = sqrtf(dx*dx + dy*dy + dz*dz);
-    mCurrentLOD = CalculateLOD(distance);
+    mQuadTree->Update(camPos, mFrustumPlanes);
+    
+    // Get visible nodes from QuadTree
+    mVisibleNodes.clear();
+    mQuadTree->GetVisibleNodes(mVisibleNodes);
+    
+    // Count LOD distribution and culled nodes
+    memset(mLodCounts, 0, sizeof(mLodCounts));
+    for (const auto* node : mVisibleNodes)
+    {
+        int lod = std::min(node->LODLevel, 4);
+        mLodCounts[lod]++;
+    }
+    mCulledNodes = mQuadTree->GetTotalNodeCount() - (int)mVisibleNodes.size();
+    
+    // Overall terrain visibility
+    mTerrainVisible = !mVisibleNodes.empty();
 
     UpdateObjectCBs(gt);
     UpdateMainPassCB(gt);
@@ -268,12 +300,13 @@ void TerrainApp::Update(const GameTimer& gt)
 
 int TerrainApp::CalculateLOD(float distance)
 {
-    for (int i = 0; i < 5; ++i)
+    // Now handled by QuadTree, kept for compatibility
+    for (int i = 0; i < (int)mLodDistances.size(); ++i)
     {
         if (distance < mLodDistances[i])
             return i;
     }
-    return 4; // Lowest detail
+    return 4;
 }
 
 bool TerrainApp::IsInFrustum(const TerrainBoundingBox& box, const XMFLOAT4* planes)
@@ -320,13 +353,26 @@ void TerrainApp::ExtractFrustumPlanes(XMFLOAT4* planes, const XMMATRIX& viewProj
 void TerrainApp::PrintDebugInfo()
 {
     // Output to console window
-    std::cout << "--- Terrain Status ---" << std::endl;
-    std::cout << "Visible: " << (mTerrainVisible ? "YES" : "NO (CULLED)") << std::endl;
-    std::cout << "LOD Level: " << mCurrentLOD << " (0=high detail, 4=low)" << std::endl;
+    std::cout << "========== QuadTree Terrain Status ==========" << std::endl;
     std::cout << "Camera: (" << std::fixed << std::setprecision(1) 
               << mCamera.GetPosition3f().x << ", " 
               << mCamera.GetPosition3f().y << ", " 
               << mCamera.GetPosition3f().z << ")" << std::endl;
+    std::cout << std::endl;
+    
+    std::cout << "--- Frustum Culling ---" << std::endl;
+    std::cout << "Total nodes: " << mQuadTree->GetTotalNodeCount() << std::endl;
+    std::cout << "Visible nodes: " << mVisibleNodes.size() << std::endl;
+    std::cout << "Culled nodes: " << mCulledNodes << std::endl;
+    std::cout << std::endl;
+    
+    std::cout << "--- LOD Distribution ---" << std::endl;
+    std::cout << "LOD 0 (highest): " << mLodCounts[0] << " nodes" << std::endl;
+    std::cout << "LOD 1: " << mLodCounts[1] << " nodes" << std::endl;
+    std::cout << "LOD 2: " << mLodCounts[2] << " nodes" << std::endl;
+    std::cout << "LOD 3: " << mLodCounts[3] << " nodes" << std::endl;
+    std::cout << "LOD 4 (lowest): " << mLodCounts[4] << " nodes" << std::endl;
+    std::cout << "==============================================" << std::endl;
     std::cout << std::endl;
 }
 
@@ -400,14 +446,25 @@ void TerrainApp::DrawTerrain()
     mCommandList->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     auto objectCB = mCurrFrameResource->ObjectCB->Resource();
-    mCommandList->SetGraphicsRootConstantBufferView(0, objectCB->GetGPUVirtualAddress());
+    UINT objCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
 
-    // Select mesh based on current LOD level
-    const char* lodMesh = Terrain::GetLODMeshName(mCurrentLOD);
-    auto& submesh = geo->DrawArgs[lodMesh];
+    // Draw each visible QuadTree node with its LOD level
+    for (size_t i = 0; i < mVisibleNodes.size(); ++i)
+    {
+        const TerrainNode* node = mVisibleNodes[i];
+        
+        // Set constant buffer for this node
+        D3D12_GPU_VIRTUAL_ADDRESS objCBAddress = objectCB->GetGPUVirtualAddress() + i * objCBByteSize;
+        mCommandList->SetGraphicsRootConstantBufferView(0, objCBAddress);
 
-    mCommandList->DrawIndexedInstanced(submesh.IndexCount, 1, 
-        submesh.StartIndexLocation, submesh.BaseVertexLocation, 0);
+        // Select mesh based on node's LOD level
+        int lod = std::min(node->LODLevel, 4);
+        const char* lodMesh = Terrain::GetLODMeshName(lod);
+        auto& submesh = geo->DrawArgs[lodMesh];
+
+        mCommandList->DrawIndexedInstanced(submesh.IndexCount, 1, 
+            submesh.StartIndexLocation, submesh.BaseVertexLocation, 0);
+    }
 }
 
 
@@ -478,18 +535,37 @@ void TerrainApp::UpdateCamera(const GameTimer& gt)
 void TerrainApp::UpdateObjectCBs(const GameTimer& gt)
 {
     auto currObjectCB = mCurrFrameResource->ObjectCB.get();
-    
-    // Single terrain - world matrix scales to terrain size, centered at origin
     float terrainSize = mTerrain->GetTerrainSize();
-    XMMATRIX world = XMMatrixScaling(terrainSize, 1.0f, terrainSize);
+    
+    // Update constant buffer for each visible QuadTree node
+    for (size_t i = 0; i < mVisibleNodes.size(); ++i)
+    {
+        const TerrainNode* node = mVisibleNodes[i];
+        
+        // Calculate world transform for this node
+        // Node position is in world space, node size determines scale
+        // UV offset/scale for texture sampling
+        float nodeScale = node->Size;
+        float uvScale = node->Size / terrainSize;
+        float uvOffsetX = (node->X / terrainSize) + 0.5f - uvScale * 0.5f;
+        float uvOffsetZ = (node->Z / terrainSize) + 0.5f - uvScale * 0.5f;
+        
+        // World matrix: scale by node size, translate to node position
+        XMMATRIX world = XMMatrixScaling(nodeScale, 1.0f, nodeScale) *
+                         XMMatrixTranslation(node->X, 0.0f, node->Z);
+        
+        // Texture transform: scale and offset UV to sample correct portion
+        XMMATRIX texTransform = XMMatrixScaling(uvScale, uvScale, 1.0f) *
+                                XMMatrixTranslation(uvOffsetX, uvOffsetZ, 0.0f);
 
-    ObjectConstants objConstants;
-    XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
-    XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(XMMatrixIdentity()));
-    objConstants.MaterialIndex = 0;
-    objConstants.LODLevel = mCurrentLOD;
+        ObjectConstants objConstants;
+        XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
+        XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
+        objConstants.MaterialIndex = 0;
+        objConstants.LODLevel = std::min(node->LODLevel, 4);
 
-    currObjectCB->CopyData(0, objConstants);
+        currObjectCB->CopyData((int)i, objConstants);
+    }
 }
 
 void TerrainApp::UpdateMainPassCB(const GameTimer& gt)
@@ -758,9 +834,13 @@ void TerrainApp::BuildPSOs()
 
 void TerrainApp::BuildFrameResources()
 {
+    // Allocate enough object CBs for all possible QuadTree nodes
+    // QuadTree can have up to ~100 visible nodes at once
+    const UINT maxObjects = 256;
+    
     for (int i = 0; i < gNumFrameResources; ++i)
     {
-        mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(), 1, 1, 1));
+        mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(), 1, maxObjects, 1));
     }
 }
 
