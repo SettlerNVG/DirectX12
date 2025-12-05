@@ -48,20 +48,15 @@ float4 PS(VertexOut pin) : SV_Target
     float2 texCoord = pin.TexC;
     float2 texelSize = 1.0 / gScreenSize;
     
-    // Unjitter: compensate for the jitter applied during rendering
-    // This ensures the current frame is sampled at the correct position
-    float2 jitterOffset = gJitterOffset / gScreenSize;
-    float2 unjitteredTexCoord = texCoord - jitterOffset;
+    // Sample current frame directly (no unjitter needed - pixels are already rendered correctly)
+    float3 currentColor = gCurrentFrame.Sample(gsamPointClamp, texCoord).rgb;
     
-    // Sample current frame at unjittered position
-    float3 currentColor = gCurrentFrame.Sample(gsamPointClamp, unjitteredTexCoord).rgb;
-    
-    // Sample motion vector at unjittered position
-    float2 velocity = gMotionVectors.Sample(gsamPointClamp, unjitteredTexCoord).rg;
+    // Sample motion vector
+    float2 velocity = gMotionVectors.Sample(gsamPointClamp, texCoord).rg;
     
     // Calculate history texture coordinate
-    // velocity points from current to previous, so we ADD it to find where this pixel was
-    float2 historyTexCoord = unjitteredTexCoord + velocity;
+    // Motion vectors point from current to previous position
+    float2 historyTexCoord = texCoord + velocity;
     
     // Check if history sample is valid (within screen bounds)
     bool validHistory = all(historyTexCoord >= 0.0) && all(historyTexCoord <= 1.0);
@@ -76,10 +71,11 @@ float4 PS(VertexOut pin) : SV_Target
     float3 historyColor = gHistoryFrame.Sample(gsamLinearClamp, historyTexCoord).rgb;
     
     // Neighborhood sampling for min/max clipping (3x3)
-    // Use unjittered coordinates for consistent sampling
+    // Also calculate mean and variance for better clamping
     float3 colorMin = currentColor;
     float3 colorMax = currentColor;
     float3 colorSum = currentColor;
+    float3 colorSumSq = currentColor * currentColor;
     
     [unroll]
     for (int dy = -1; dy <= 1; ++dy)
@@ -90,18 +86,28 @@ float4 PS(VertexOut pin) : SV_Target
             if (dx == 0 && dy == 0) continue;
             
             float2 offset = float2(dx, dy) * texelSize;
-            float3 neighborColor = gCurrentFrame.Sample(gsamPointClamp, unjitteredTexCoord + offset).rgb;
+            float3 neighborColor = gCurrentFrame.Sample(gsamPointClamp, texCoord + offset).rgb;
             
             colorMin = min(colorMin, neighborColor);
             colorMax = max(colorMax, neighborColor);
             colorSum += neighborColor;
+            colorSumSq += neighborColor * neighborColor;
         }
     }
     
-    float3 colorAvg = colorSum / 9.0;
+    // Calculate mean and standard deviation
+    float3 colorMean = colorSum / 9.0;
+    float3 colorVariance = (colorSumSq / 9.0) - (colorMean * colorMean);
+    float3 colorStdDev = sqrt(max(colorVariance, 0.0));
     
-    // Simple clamp to neighborhood (reduces ghosting)
-    historyColor = clamp(historyColor, colorMin, colorMax);
+    // Use variance-based clipping with gamma factor
+    // Larger gamma = less aggressive clamping = more stable but potential ghosting
+    float gamma = 1.25;
+    float3 aabbMin = colorMean - gamma * colorStdDev;
+    float3 aabbMax = colorMean + gamma * colorStdDev;
+    
+    // Clamp history to variance-based AABB (reduces ghosting while maintaining stability)
+    historyColor = clamp(historyColor, aabbMin, aabbMax);
     
     // Adaptive blend factor based on motion
     float motionLength = length(velocity * gScreenSize);

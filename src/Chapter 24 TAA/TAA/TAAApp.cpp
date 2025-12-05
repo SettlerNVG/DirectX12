@@ -846,7 +846,7 @@ void TAAApp::UpdateTAACB(const GameTimer& gt)
     
     mTAACB.JitterOffset = jitter;
     mTAACB.ScreenSize = XMFLOAT2((float)mClientWidth, (float)mClientHeight);
-    mTAACB.BlendFactor = 0.05f;  // Lower for more stable history
+    mTAACB.BlendFactor = 0.04f;  // Lower for more stable history (4% current, 96% history)
     mTAACB.MotionScale = 1.0f;
 
     auto currTAACB = mCurrFrameResource->TAACB.get();
