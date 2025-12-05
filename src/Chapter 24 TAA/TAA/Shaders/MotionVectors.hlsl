@@ -45,17 +45,9 @@ float2 PS(VertexOut pin) : SV_Target
     float2 currNDC = pin.CurrPosH.xy / pin.CurrPosH.w;
     float2 prevNDC = pin.PrevPosH.xy / pin.PrevPosH.w;
     
-    // Calculate motion vector (from current to previous for reprojection)
-    // Convert from NDC [-1,1] to texture space [0,1]
-    float2 currUV = currNDC * 0.5f + 0.5f;
-    float2 prevUV = prevNDC * 0.5f + 0.5f;
-    
-    // Flip Y for DirectX
-    currUV.y = 1.0f - currUV.y;
-    prevUV.y = 1.0f - prevUV.y;
-    
-    // Velocity points from current to previous (for history lookup)
-    float2 velocity = currUV - prevUV;
+    // Motion vector in NDC space, then convert to UV space
+    // Velocity = previous - current (where the pixel came from)
+    float2 velocity = (prevNDC - currNDC) * 0.5f;
     
     return velocity;
 }

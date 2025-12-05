@@ -103,13 +103,10 @@ void TemporalAA::OnResize(UINT newWidth, UINT newHeight)
 
 void TemporalAA::SwapBuffers()
 {
-    // Swap current and history buffers
-    mTAAOutput.Swap(mHistoryBuffer);
-    
-    // Swap descriptors
-    std::swap(mhCpuSrv, mhHistoryCpuSrv);
-    std::swap(mhGpuSrv, mhHistoryGpuSrv);
-    std::swap(mhCpuRtv, mhHistoryCpuRtv);
+    // Note: We don't actually swap buffers anymore.
+    // Instead, we copy TAA output to history in the Draw function.
+    // This avoids descriptor management issues.
+    // The function is kept for API compatibility but does nothing.
 }
 
 XMFLOAT2 TemporalAA::GetJitter(int frameIndex)

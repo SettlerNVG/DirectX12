@@ -475,20 +475,30 @@ void TAAApp::Draw(const GameTimer& gt)
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PRESENT));
         
+        // Copy TAA output to history buffer for next frame
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            mTemporalAA->HistoryResource(),
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            D3D12_RESOURCE_STATE_COPY_DEST));
+
+        mCommandList->CopyResource(mTemporalAA->HistoryResource(), mTemporalAA->Resource());
+
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            mTemporalAA->HistoryResource(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_GENERIC_READ));
+        
         mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
             mTemporalAA->Resource(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_GENERIC_READ));
-        
-        // Swap TAA buffers for next frame
-        mTemporalAA->SwapBuffers();
     }
     else
     {
-        // Copy scene color directly to back buffer
+        // Copy scene color directly to back buffer (no jitter applied when TAA disabled)
         mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
             mSceneColorBuffer.Get(),
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
             D3D12_RESOURCE_STATE_COPY_SOURCE));
         
         mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
@@ -506,7 +516,7 @@ void TAAApp::Draw(const GameTimer& gt)
         mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
             mSceneColorBuffer.Get(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET));
+            D3D12_RESOURCE_STATE_GENERIC_READ));
     }
 
     ThrowIfFailed(mCommandList->Close());
@@ -572,13 +582,23 @@ void TAAApp::DrawMotionVectors()
         D3D12_RESOURCE_STATE_GENERIC_READ,
         D3D12_RESOURCE_STATE_RENDER_TARGET));
 
+    // Need to use depth buffer for proper motion vector generation
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneDepthBuffer.Get(),
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_DEPTH_READ));
+
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mMotionVectorRtvIndex, mRtvDescriptorSize);
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(mDsvHeap->GetCPUDescriptorHandleForHeapStart());
+    dsvHandle.Offset(1, mDsvDescriptorSize);
 
     float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
     mCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
-    mCommandList->OMSetRenderTargets(1, &rtvHandle, true, nullptr);
+    // Use depth buffer for depth testing but don't write to it
+    mCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
 
     mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
     
@@ -590,6 +610,11 @@ void TAAApp::DrawMotionVectors()
     mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
         mMotionVectors->Resource(),
         D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_GENERIC_READ));
+
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneDepthBuffer.Get(),
+        D3D12_RESOURCE_STATE_DEPTH_READ,
         D3D12_RESOURCE_STATE_GENERIC_READ));
 }
 
@@ -740,25 +765,29 @@ void TAAApp::UpdateMaterialBuffer(const GameTimer& gt)
 
 void TAAApp::UpdateMainPassCB(const GameTimer& gt)
 {
-    // Save previous frame matrices
+    // Save previous frame matrices BEFORE applying new jitter
     mPrevPassCB = mMainPassCB;
 
     XMMATRIX view = mCamera.GetView();
     XMMATRIX proj = mCamera.GetProj();
 
-    // Apply jitter to projection matrix (in NDC space)
-    XMFLOAT2 jitter = TemporalAA::GetJitter(mFrameIndex);
-    
-    // Convert pixel jitter to NDC space
-    float jitterX = (2.0f * jitter.x) / (float)mClientWidth;
-    float jitterY = (2.0f * jitter.y) / (float)mClientHeight;
-    
-    // Modify projection matrix directly (offset in third row)
-    XMFLOAT4X4 projMat;
-    XMStoreFloat4x4(&projMat, proj);
-    projMat._31 += jitterX;  // Horizontal offset
-    projMat._32 += jitterY;  // Vertical offset
-    proj = XMLoadFloat4x4(&projMat);
+    // Only apply jitter when TAA is enabled
+    if (mTAAEnabled)
+    {
+        // Apply jitter to projection matrix (in NDC space)
+        XMFLOAT2 jitter = TemporalAA::GetJitter(mFrameIndex);
+        
+        // Convert pixel jitter to NDC space
+        float jitterX = (2.0f * jitter.x) / (float)mClientWidth;
+        float jitterY = (2.0f * jitter.y) / (float)mClientHeight;
+        
+        // Modify projection matrix directly (offset in third row)
+        XMFLOAT4X4 projMat;
+        XMStoreFloat4x4(&projMat, proj);
+        projMat._31 += jitterX;  // Horizontal offset
+        projMat._32 += jitterY;  // Vertical offset
+        proj = XMLoadFloat4x4(&projMat);
+    }
 
     XMMATRIX viewProj = XMMatrixMultiply(view, proj);
     XMMATRIX invView = XMMatrixInverse(&XMMatrixDeterminant(view), view);
@@ -1122,7 +1151,7 @@ void TAAApp::BuildPSOs()
     opaquePsoDesc.DSVFormat = mDepthStencilFormat;
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&opaquePsoDesc, IID_PPV_ARGS(&mPSOs["opaque"])));
 
-    // Motion vectors PSO
+    // Motion vectors PSO - uses depth test but doesn't write to depth
     D3D12_GRAPHICS_PIPELINE_STATE_DESC motionVectorsPsoDesc = opaquePsoDesc;
     motionVectorsPsoDesc.VS =
     {
@@ -1135,8 +1164,10 @@ void TAAApp::BuildPSOs()
         mShaders["motionVectorsPS"]->GetBufferSize()
     };
     motionVectorsPsoDesc.RTVFormats[0] = DXGI_FORMAT_R16G16_FLOAT;
-    motionVectorsPsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
-    motionVectorsPsoDesc.DepthStencilState.DepthEnable = FALSE;
+    motionVectorsPsoDesc.DSVFormat = mDepthStencilFormat;
+    motionVectorsPsoDesc.DepthStencilState.DepthEnable = TRUE;
+    motionVectorsPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO; // Read only
+    motionVectorsPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&motionVectorsPsoDesc, IID_PPV_ARGS(&mPSOs["motionVectors"])));
 
     // TAA resolve PSO (full-screen pass)
