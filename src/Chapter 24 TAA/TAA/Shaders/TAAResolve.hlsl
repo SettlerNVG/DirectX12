@@ -48,11 +48,16 @@ float4 PS(VertexOut pin) : SV_Target
     float2 texCoord = pin.TexC;
     float2 texelSize = 1.0 / gScreenSize;
     
-    // Sample current frame
-    float3 currentColor = gCurrentFrame.Sample(gsamPointClamp, texCoord).rgb;
+    // Unjitter: compensate for the jitter applied during rendering
+    // This ensures the current frame is sampled at the correct position
+    float2 jitterOffset = gJitterOffset / gScreenSize;
+    float2 unjitteredTexCoord = texCoord - jitterOffset;
+    
+    // Sample current frame at unjittered position
+    float3 currentColor = gCurrentFrame.Sample(gsamPointClamp, unjitteredTexCoord).rgb;
     
     // Sample motion vector
-    float2 velocity = gMotionVectors.Sample(gsamPointClamp, texCoord).rg;
+    float2 velocity = gMotionVectors.Sample(gsamPointClamp, unjitteredTexCoord).rg;
     
     // Calculate history texture coordinate
     float2 historyTexCoord = texCoord + velocity;
@@ -70,6 +75,7 @@ float4 PS(VertexOut pin) : SV_Target
     float3 historyColor = gHistoryFrame.Sample(gsamLinearClamp, historyTexCoord).rgb;
     
     // Neighborhood sampling for min/max clipping (3x3)
+    // Use unjittered coordinates for consistent sampling
     float3 colorMin = currentColor;
     float3 colorMax = currentColor;
     float3 colorSum = currentColor;
@@ -83,7 +89,7 @@ float4 PS(VertexOut pin) : SV_Target
             if (dx == 0 && dy == 0) continue;
             
             float2 offset = float2(dx, dy) * texelSize;
-            float3 neighborColor = gCurrentFrame.Sample(gsamPointClamp, texCoord + offset).rgb;
+            float3 neighborColor = gCurrentFrame.Sample(gsamPointClamp, unjitteredTexCoord + offset).rgb;
             
             colorMin = min(colorMin, neighborColor);
             colorMax = max(colorMax, neighborColor);
