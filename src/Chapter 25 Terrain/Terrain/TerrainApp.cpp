@@ -571,29 +571,13 @@ void TerrainApp::BuildDescriptorHeaps()
     ThrowIfFailed(md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
 
     // Load textures from TerrainDetails/003
-    std::unique_ptr<uint8_t[]> ddsData;
-    std::vector<D3D12_SUBRESOURCE_DATA> subresources;
     
     // Load heightmap DDS
-    HRESULT hr = DirectX::LoadDDSTextureFromFile(
-        md3dDevice.Get(), L"TerrainDetails/003/Height_Out.dds",
-        mHeightmapTexture.ReleaseAndGetAddressOf(), ddsData, subresources);
+    HRESULT hr = DirectX::CreateDDSTextureFromFile12(
+        md3dDevice.Get(), mCommandList.Get(), L"TerrainDetails/003/Height_Out.dds",
+        mHeightmapTexture, mHeightmapUploadBuffer);
     
-    if (SUCCEEDED(hr))
-    {
-        const UINT64 uploadSize = GetRequiredIntermediateSize(mHeightmapTexture.Get(), 0, (UINT)subresources.size());
-        ThrowIfFailed(md3dDevice->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(uploadSize), D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&mHeightmapUploadBuffer)));
-        
-        UpdateSubresources(mCommandList.Get(), mHeightmapTexture.Get(), mHeightmapUploadBuffer.Get(),
-                           0, 0, (UINT)subresources.size(), subresources.data());
-        
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            mHeightmapTexture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
-    }
-    else
+    if (FAILED(hr))
     {
         // Fallback: create procedural heightmap texture
         UINT width = mTerrain->GetHeightmapWidth();
@@ -642,50 +626,16 @@ void TerrainApp::BuildDescriptorHeaps()
     }
     
     // Load diffuse/weathering texture
-    ddsData.reset();
-    subresources.clear();
-    hr = DirectX::LoadDDSTextureFromFile(
-        md3dDevice.Get(), L"TerrainDetails/003/Weathering_Out.dds",
-        mDiffuseTexture.ReleaseAndGetAddressOf(), ddsData, subresources);
-    
-    if (SUCCEEDED(hr))
-    {
-        ComPtr<ID3D12Resource> uploadBuffer;
-        const UINT64 uploadSize = GetRequiredIntermediateSize(mDiffuseTexture.Get(), 0, (UINT)subresources.size());
-        ThrowIfFailed(md3dDevice->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(uploadSize), D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&uploadBuffer)));
-        
-        UpdateSubresources(mCommandList.Get(), mDiffuseTexture.Get(), uploadBuffer.Get(),
-                           0, 0, (UINT)subresources.size(), subresources.data());
-        
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            mDiffuseTexture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
-    }
+    ComPtr<ID3D12Resource> diffuseUploadBuffer;
+    hr = DirectX::CreateDDSTextureFromFile12(
+        md3dDevice.Get(), mCommandList.Get(), L"TerrainDetails/003/Weathering_Out.dds",
+        mDiffuseTexture, diffuseUploadBuffer);
     
     // Load normal map texture
-    ddsData.reset();
-    subresources.clear();
-    hr = DirectX::LoadDDSTextureFromFile(
-        md3dDevice.Get(), L"TerrainDetails/003/Normals_Out.dds",
-        mNormalTexture.ReleaseAndGetAddressOf(), ddsData, subresources);
-    
-    if (SUCCEEDED(hr))
-    {
-        ComPtr<ID3D12Resource> uploadBuffer;
-        const UINT64 uploadSize = GetRequiredIntermediateSize(mNormalTexture.Get(), 0, (UINT)subresources.size());
-        ThrowIfFailed(md3dDevice->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(uploadSize), D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&uploadBuffer)));
-        
-        UpdateSubresources(mCommandList.Get(), mNormalTexture.Get(), uploadBuffer.Get(),
-                           0, 0, (UINT)subresources.size(), subresources.data());
-        
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            mNormalTexture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
-    }
+    ComPtr<ID3D12Resource> normalUploadBuffer;
+    hr = DirectX::CreateDDSTextureFromFile12(
+        md3dDevice.Get(), mCommandList.Get(), L"TerrainDetails/003/Normals_Out.dds",
+        mNormalTexture, normalUploadBuffer);
     
     // Create white texture fallback
     D3D12_RESOURCE_DESC whiteTexDesc = {};

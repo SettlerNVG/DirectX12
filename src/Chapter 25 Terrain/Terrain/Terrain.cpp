@@ -3,6 +3,7 @@
 //***************************************************************************************
 
 #include "Terrain.h"
+#include "../../Common/DDSTextureLoader.h"
 #include <fstream>
 #include <random>
 #include <cmath>
@@ -70,14 +71,10 @@ bool Terrain::LoadHeightmap(const std::wstring& filename, UINT width, UINT heigh
 
 bool Terrain::LoadHeightmapDDS(const std::wstring& filename, ID3D12Device* device, ID3D12GraphicsCommandList* cmdList)
 {
-    // Try to load DDS texture
-    std::unique_ptr<uint8_t[]> ddsData;
-    std::vector<D3D12_SUBRESOURCE_DATA> subresources;
-    
-    HRESULT hr = DirectX::LoadDDSTextureFromFile(
-        device, filename.c_str(),
-        mHeightmapTexture.ReleaseAndGetAddressOf(),
-        ddsData, subresources);
+    // Try to load DDS texture using CreateDDSTextureFromFile12
+    HRESULT hr = DirectX::CreateDDSTextureFromFile12(
+        device, cmdList, filename.c_str(),
+        mHeightmapTexture, mHeightmapUploadBuffer);
     
     if (FAILED(hr))
         return false;
@@ -86,25 +83,6 @@ bool Terrain::LoadHeightmapDDS(const std::wstring& filename, ID3D12Device* devic
     D3D12_RESOURCE_DESC texDesc = mHeightmapTexture->GetDesc();
     mHeightmapWidth = (UINT)texDesc.Width;
     mHeightmapHeight = texDesc.Height;
-    
-    // Upload texture data
-    const UINT64 uploadBufferSize = GetRequiredIntermediateSize(mHeightmapTexture.Get(), 0, (UINT)subresources.size());
-    
-    ThrowIfFailed(device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
-        D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize),
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&mHeightmapUploadBuffer)));
-    
-    UpdateSubresources(cmdList, mHeightmapTexture.Get(), mHeightmapUploadBuffer.Get(),
-                       0, 0, (UINT)subresources.size(), subresources.data());
-    
-    cmdList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-        mHeightmapTexture.Get(),
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
     
     // Generate CPU-side heightmap for collision/sampling
     // For now, generate procedural as fallback for CPU queries
