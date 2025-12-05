@@ -17,7 +17,7 @@ using namespace DirectX::PackedVector;
 
 const int gNumFrameResources = 3;
 
-struct Material
+struct TAAMaterial
 {
     std::string Name;
     int MatCBIndex = -1;
@@ -31,7 +31,7 @@ struct Material
     DirectX::XMFLOAT4X4 MatTransform = MathHelper::Identity4x4();
 };
 
-struct Texture
+struct TAATexture
 {
     std::string Name;
     std::wstring Filename;
@@ -48,7 +48,7 @@ struct RenderItem
     XMFLOAT4X4 TexTransform = MathHelper::Identity4x4();
     int NumFramesDirty = gNumFrameResources;
     UINT ObjCBIndex = -1;
-    Material* Mat = nullptr;
+    TAAMaterial* Mat = nullptr;
     MeshGeometry* Geo = nullptr;
     D3D12_PRIMITIVE_TOPOLOGY PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     UINT IndexCount = 0;
@@ -119,8 +119,8 @@ private:
     ComPtr<ID3D12DescriptorHeap> mRtvDescriptorHeap = nullptr;
 
     std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
-    std::unordered_map<std::string, std::unique_ptr<Material>> mMaterials;
-    std::unordered_map<std::string, std::unique_ptr<Texture>> mTextures;
+    std::unordered_map<std::string, std::unique_ptr<TAAMaterial>> mMaterials;
+    std::unordered_map<std::string, std::unique_ptr<TAATexture>> mTextures;
     std::unordered_map<std::string, ComPtr<ID3DBlob>> mShaders;
     std::unordered_map<std::string, ComPtr<ID3D12PipelineState>> mPSOs;
 
@@ -686,7 +686,7 @@ void TAAApp::UpdateMaterialBuffer(const GameTimer& gt)
     auto currMaterialBuffer = mCurrFrameResource->MaterialBuffer.get();
     for(auto& e : mMaterials)
     {
-        Material* mat = e.second.get();
+        TAAMaterial* mat = e.second.get();
         if(mat->NumFramesDirty > 0)
         {
             XMMATRIX matTransform = XMLoadFloat4x4(&mat->MatTransform);
@@ -783,7 +783,7 @@ void TAAApp::UpdateTAACB(const GameTimer& gt)
 void TAAApp::LoadTextures()
 {
     // Create a simple white texture
-    auto whiteTex = std::make_unique<Texture>();
+    auto whiteTex = std::make_unique<TAATexture>();
     whiteTex->Name = "whiteTex";
     whiteTex->Filename = L"";
     
@@ -1128,7 +1128,7 @@ void TAAApp::BuildFrameResources()
 
 void TAAApp::BuildMaterials()
 {
-    auto white = std::make_unique<Material>();
+    auto white = std::make_unique<TAAMaterial>();
     white->Name = "white";
     white->MatCBIndex = 0;
     white->DiffuseSrvHeapIndex = 5;
@@ -1137,7 +1137,7 @@ void TAAApp::BuildMaterials()
     white->FresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
     white->Roughness = 0.3f;
 
-    auto red = std::make_unique<Material>();
+    auto red = std::make_unique<TAAMaterial>();
     red->Name = "red";
     red->MatCBIndex = 1;
     red->DiffuseSrvHeapIndex = 5;
@@ -1146,7 +1146,7 @@ void TAAApp::BuildMaterials()
     red->FresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
     red->Roughness = 0.3f;
 
-    auto green = std::make_unique<Material>();
+    auto green = std::make_unique<TAAMaterial>();
     green->Name = "green";
     green->MatCBIndex = 2;
     green->DiffuseSrvHeapIndex = 5;
@@ -1155,7 +1155,7 @@ void TAAApp::BuildMaterials()
     green->FresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
     green->Roughness = 0.3f;
 
-    auto blue = std::make_unique<Material>();
+    auto blue = std::make_unique<TAAMaterial>();
     blue->Name = "blue";
     blue->MatCBIndex = 3;
     blue->DiffuseSrvHeapIndex = 5;
