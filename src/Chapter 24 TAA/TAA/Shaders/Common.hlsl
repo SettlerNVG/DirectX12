@@ -66,9 +66,10 @@ cbuffer cbPass : register(b1)
     float4x4 gInvView;
     float4x4 gProj;
     float4x4 gInvProj;
-    float4x4 gViewProj;
+    float4x4 gViewProj;            // With jitter (for rendering)
     float4x4 gInvViewProj;
-    float4x4 gPrevViewProj;        // Previous frame view-projection for motion vectors
+    float4x4 gPrevViewProj;        // Previous frame unjittered (for motion vectors)
+    float4x4 gUnjitteredViewProj;  // Current frame without jitter (for motion vectors)
     float4x4 gShadowTransform;
     float3 gEyePosW;
     float cbPerPassPad1;

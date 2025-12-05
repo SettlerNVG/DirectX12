@@ -765,13 +765,29 @@ void TAAApp::UpdateMaterialBuffer(const GameTimer& gt)
 
 void TAAApp::UpdateMainPassCB(const GameTimer& gt)
 {
-    // Save previous frame matrices BEFORE applying new jitter
-    mPrevPassCB = mMainPassCB;
+    // Save previous frame's UNJITTERED ViewProj for motion vectors
+    XMFLOAT4X4 prevUnjitteredViewProj = mMainPassCB.UnjitteredViewProj;
 
     XMMATRIX view = mCamera.GetView();
     XMMATRIX proj = mCamera.GetProj();
+    
+    // Calculate unjittered ViewProj first (for motion vectors)
+    XMMATRIX unjitteredViewProj = XMMatrixMultiply(view, proj);
+    
+    // Store unjittered ViewProj
+    XMStoreFloat4x4(&mMainPassCB.UnjitteredViewProj, XMMatrixTranspose(unjitteredViewProj));
+    
+    // Store previous frame's unjittered ViewProj for motion vectors
+    if(mFrameIndex > 0)
+    {
+        mMainPassCB.PrevViewProj = prevUnjitteredViewProj;
+    }
+    else
+    {
+        mMainPassCB.PrevViewProj = mMainPassCB.UnjitteredViewProj;
+    }
 
-    // Only apply jitter when TAA is enabled
+    // Only apply jitter when TAA is enabled (for rendering)
     if (mTAAEnabled)
     {
         // Apply jitter to projection matrix (in NDC space)
@@ -800,16 +816,6 @@ void TAAApp::UpdateMainPassCB(const GameTimer& gt)
     XMStoreFloat4x4(&mMainPassCB.InvProj, XMMatrixTranspose(invProj));
     XMStoreFloat4x4(&mMainPassCB.ViewProj, XMMatrixTranspose(viewProj));
     XMStoreFloat4x4(&mMainPassCB.InvViewProj, XMMatrixTranspose(invViewProj));
-    
-    // Store previous frame ViewProj for motion vectors
-    if(mFrameIndex > 0)
-    {
-        mMainPassCB.PrevViewProj = mPrevPassCB.ViewProj;
-    }
-    else
-    {
-        mMainPassCB.PrevViewProj = mMainPassCB.ViewProj;
-    }
 
     mMainPassCB.EyePosW = mCamera.GetPosition3f();
     mMainPassCB.RenderTargetSize = XMFLOAT2((float)mClientWidth, (float)mClientHeight);

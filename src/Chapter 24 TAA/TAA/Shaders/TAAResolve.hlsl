@@ -56,11 +56,12 @@ float4 PS(VertexOut pin) : SV_Target
     // Sample current frame at unjittered position
     float3 currentColor = gCurrentFrame.Sample(gsamPointClamp, unjitteredTexCoord).rgb;
     
-    // Sample motion vector
+    // Sample motion vector at unjittered position
     float2 velocity = gMotionVectors.Sample(gsamPointClamp, unjitteredTexCoord).rg;
     
     // Calculate history texture coordinate
-    float2 historyTexCoord = texCoord + velocity;
+    // velocity points from current to previous, so we ADD it to find where this pixel was
+    float2 historyTexCoord = unjitteredTexCoord + velocity;
     
     // Check if history sample is valid (within screen bounds)
     bool validHistory = all(historyTexCoord >= 0.0) && all(historyTexCoord <= 1.0);

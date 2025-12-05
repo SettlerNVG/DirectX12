@@ -20,9 +20,10 @@ struct PassConstants
     DirectX::XMFLOAT4X4 InvView = MathHelper::Identity4x4();
     DirectX::XMFLOAT4X4 Proj = MathHelper::Identity4x4();
     DirectX::XMFLOAT4X4 InvProj = MathHelper::Identity4x4();
-    DirectX::XMFLOAT4X4 ViewProj = MathHelper::Identity4x4();
+    DirectX::XMFLOAT4X4 ViewProj = MathHelper::Identity4x4();           // With jitter (for rendering)
     DirectX::XMFLOAT4X4 InvViewProj = MathHelper::Identity4x4();
-    DirectX::XMFLOAT4X4 PrevViewProj = MathHelper::Identity4x4(); // For motion vectors
+    DirectX::XMFLOAT4X4 PrevViewProj = MathHelper::Identity4x4();       // Previous frame unjittered (for motion vectors)
+    DirectX::XMFLOAT4X4 UnjitteredViewProj = MathHelper::Identity4x4(); // Current frame without jitter (for motion vectors)
     DirectX::XMFLOAT4X4 ShadowTransform = MathHelper::Identity4x4();
     DirectX::XMFLOAT3 EyePosW = { 0.0f, 0.0f, 0.0f };
     float cbPerObjectPad1 = 0.0f;

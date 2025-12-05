@@ -29,11 +29,13 @@ VertexOut VS(VertexIn vin)
     // Transform to world space
     float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
     
-    // Current frame clip space position (with jitter)
-    vout.CurrPosH = mul(posW, gViewProj);
-    vout.PosH = vout.CurrPosH;
+    // Current frame clip space position WITHOUT jitter (for motion vectors)
+    vout.CurrPosH = mul(posW, gUnjitteredViewProj);
     
-    // Previous frame clip space position (with previous frame's jitter)
+    // For rasterization, use jittered position
+    vout.PosH = mul(posW, gViewProj);
+    
+    // Previous frame clip space position (also without jitter)
     vout.PrevPosH = mul(posW, gPrevViewProj);
     
     return vout;
