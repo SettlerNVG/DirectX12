@@ -203,22 +203,50 @@ float4 PS_RCAS(VertexOut pin) : SV_Target
     return float4(c, 1.0);
 }
 
-// Combined simple FSR (for demonstration)
+// Combined FSR with CAS (Contrast Adaptive Sharpening)
+// Based on AMD FidelityFX CAS
 float4 PS_FSR(VertexOut pin) : SV_Target
 {
-    // Simple bilinear upscale with sharpening
-    float3 color = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC, 0).rgb;
-    
-    // Apply RCAS-style sharpening
     float2 texelSize = Const1.zw;
-    float3 b = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(0, -1) * texelSize, 0).rgb;
-    float3 d = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(-1, 0) * texelSize, 0).rgb;
-    float3 f = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(1, 0) * texelSize, 0).rgb;
-    float3 h = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(0, 1) * texelSize, 0).rgb;
     
-    // Compute sharpening
-    float3 blur = (b + d + f + h) * 0.25;
-    float3 sharp = color + (color - blur) * (1.0 - RCASSharpness * 0.5);
+    // Sample 3x3 neighborhood
+    float3 a = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(-1, -1) * texelSize, 0).rgb;
+    float3 b = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2( 0, -1) * texelSize, 0).rgb;
+    float3 c = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2( 1, -1) * texelSize, 0).rgb;
+    float3 d = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(-1,  0) * texelSize, 0).rgb;
+    float3 e = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC, 0).rgb; // center
+    float3 f = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2( 1,  0) * texelSize, 0).rgb;
+    float3 g = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(-1,  1) * texelSize, 0).rgb;
+    float3 h = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2( 0,  1) * texelSize, 0).rgb;
+    float3 i = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2( 1,  1) * texelSize, 0).rgb;
     
-    return float4(saturate(sharp), 1.0);
+    // Soft min and max (per channel)
+    // a]b c      b
+    // d[e]f => d e f
+    // g h i      h
+    float3 mnRGB = min(min(min(d, e), min(f, b)), h);
+    float3 mnRGB2 = min(min(min(mnRGB, a), min(c, g)), i);
+    mnRGB = mnRGB + mnRGB2;
+    
+    float3 mxRGB = max(max(max(d, e), max(f, b)), h);
+    float3 mxRGB2 = max(max(max(mxRGB, a), max(c, g)), i);
+    mxRGB = mxRGB + mxRGB2;
+    
+    // Smooth minimum distance to signal limit divided by smooth max
+    float3 rcpMxRGB = rcp(mxRGB);
+    float3 ampRGB = saturate(min(mnRGB, 2.0 - mxRGB) * rcpMxRGB);
+    
+    // Shaping amount of sharpening
+    // RCASSharpness: 0.0 = max sharpness, 1.0 = no sharpening
+    float peak = 8.0 - 3.0 * RCASSharpness;
+    float3 wRGB = -rcp(ampRGB * peak + 4.0);
+    
+    // Filter shape:
+    //  0 w 0
+    //  w 1 w
+    //  0 w 0
+    float3 rcpWeightRGB = rcp(1.0 + 4.0 * wRGB);
+    float3 output = saturate((b * wRGB + d * wRGB + f * wRGB + h * wRGB + e) * rcpWeightRGB);
+    
+    return float4(output, 1.0);
 }

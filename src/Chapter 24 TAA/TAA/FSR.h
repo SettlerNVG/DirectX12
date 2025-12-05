@@ -95,7 +95,7 @@ private:
     
     DXGI_FORMAT mFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     FSRQualityMode mQualityMode = FSRQualityMode::Quality;
-    float mSharpness = 0.2f; // Default sharpness
+    float mSharpness = 0.0f; // Default sharpness (0.0 = max, 1.0 = none)
     
     CD3DX12_CPU_DESCRIPTOR_HANDLE mhIntermediateCpuSrv;
     CD3DX12_GPU_DESCRIPTOR_HANDLE mhIntermediateGpuSrv;
