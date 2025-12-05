@@ -90,9 +90,11 @@ private:
     
     // Diffuse/Color texture
     ComPtr<ID3D12Resource> mDiffuseTexture;
+    ComPtr<ID3D12Resource> mDiffuseUploadBuffer;
     
     // Normal map texture
     ComPtr<ID3D12Resource> mNormalTexture;
+    ComPtr<ID3D12Resource> mNormalUploadBuffer;
     
     // White texture fallback
     ComPtr<ID3D12Resource> mWhiteTexture;
@@ -630,16 +632,14 @@ void TerrainApp::BuildDescriptorHeaps()
     }
     
     // Load diffuse/weathering texture
-    ComPtr<ID3D12Resource> diffuseUploadBuffer;
     hr = DirectX::CreateDDSTextureFromFile12(
         md3dDevice.Get(), mCommandList.Get(), L"TerrainDetails/003/Weathering_Out.dds",
-        mDiffuseTexture, diffuseUploadBuffer);
+        mDiffuseTexture, mDiffuseUploadBuffer);
     
     // Load normal map texture
-    ComPtr<ID3D12Resource> normalUploadBuffer;
     hr = DirectX::CreateDDSTextureFromFile12(
         md3dDevice.Get(), mCommandList.Get(), L"TerrainDetails/003/Normals_Out.dds",
-        mNormalTexture, normalUploadBuffer);
+        mNormalTexture, mNormalUploadBuffer);
     
     // Create white texture fallback
     D3D12_RESOURCE_DESC whiteTexDesc = {};
