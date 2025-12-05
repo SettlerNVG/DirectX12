@@ -96,8 +96,11 @@ void TemporalAA::OnResize(UINT newWidth, UINT newHeight)
         mWidth = newWidth;
         mHeight = newHeight;
 
+        mViewport = { 0.0f, 0.0f, (float)mWidth, (float)mHeight, 0.0f, 1.0f };
+        mScissorRect = { 0, 0, (int)mWidth, (int)mHeight };
+
         BuildResource();
-        BuildDescriptors();
+        // Note: Descriptors are created in TAAApp::OnResize, not here
     }
 }
 

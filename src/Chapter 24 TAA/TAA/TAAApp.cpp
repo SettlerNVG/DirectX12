@@ -336,49 +336,65 @@ void TAAApp::OnResize()
     dsvDesc.Texture2D.MipSlice = 0;
     md3dDevice->CreateDepthStencilView(mSceneDepthBuffer.Get(), &dsvDesc, dsvHandle);
 
-    // Setup TAA and motion vector descriptors
-    CD3DX12_CPU_DESCRIPTOR_HANDLE srvCpuHandle(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
-    CD3DX12_GPU_DESCRIPTOR_HANDLE srvGpuHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-    
-    mSceneColorSrvIndex = 0;
-    srvCpuHandle.Offset(mSceneColorSrvIndex, mCbvSrvUavDescriptorSize);
-    srvGpuHandle.Offset(mSceneColorSrvIndex, mCbvSrvUavDescriptorSize);
+    // Setup SRV descriptors for TAA resolve shader
+    // Order must match shader expectations:
+    // t0: Current Frame (Scene Color)
+    // t1: History Frame (TAA History)
+    // t2: Motion Vectors
+    // t3: Depth Map
     
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format = mBackBufferFormat;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
+    
+    // t0: Scene Color (Current Frame)
+    mSceneColorSrvIndex = 0;
+    CD3DX12_CPU_DESCRIPTOR_HANDLE srvCpuHandle(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    srvCpuHandle.Offset(mSceneColorSrvIndex, mCbvSrvUavDescriptorSize);
+    srvDesc.Format = mBackBufferFormat;
     md3dDevice->CreateShaderResourceView(mSceneColorBuffer.Get(), &srvDesc, srvCpuHandle);
     
-    // Motion vectors
-    mMotionVectorSrvIndex = 1;
+    // t1: TAA History Buffer
+    mTAAHistorySrvIndex = 1;
     srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
-    srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    srvCpuHandle.Offset(mTAAHistorySrvIndex, mCbvSrvUavDescriptorSize);
+    srvDesc.Format = mBackBufferFormat;
+    md3dDevice->CreateShaderResourceView(mTemporalAA->HistoryResource(), &srvDesc, srvCpuHandle);
+    
+    // t2: Motion Vectors
+    mMotionVectorSrvIndex = 2;
+    srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    CD3DX12_GPU_DESCRIPTOR_HANDLE srvGpuHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     srvCpuHandle.Offset(mMotionVectorSrvIndex, mCbvSrvUavDescriptorSize);
     srvGpuHandle.Offset(mMotionVectorSrvIndex, mCbvSrvUavDescriptorSize);
     rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mMotionVectorRtvIndex, mRtvDescriptorSize);
     mMotionVectors->BuildDescriptors(srvCpuHandle, srvGpuHandle, rtvHandle);
     
-    // TAA buffers
-    mTAAOutputSrvIndex = 2;
-    mTAAHistorySrvIndex = 3;
+    // t3: Depth Map
+    mSceneDepthSrvIndex = 3;
+    srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    srvCpuHandle.Offset(mSceneDepthSrvIndex, mCbvSrvUavDescriptorSize);
+    srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+    md3dDevice->CreateShaderResourceView(mSceneDepthBuffer.Get(), &srvDesc, srvCpuHandle);
+    
+    // TAA Output buffer (separate, not part of the TAA resolve input table)
+    mTAAOutputSrvIndex = 4;
     srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
     srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     srvCpuHandle.Offset(mTAAOutputSrvIndex, mCbvSrvUavDescriptorSize);
     srvGpuHandle.Offset(mTAAOutputSrvIndex, mCbvSrvUavDescriptorSize);
     rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mTAAOutputRtvIndex, mRtvDescriptorSize);
-    mTemporalAA->BuildDescriptors(srvCpuHandle, srvGpuHandle, rtvHandle, 
-        mCbvSrvUavDescriptorSize, mRtvDescriptorSize);
+    srvDesc.Format = mBackBufferFormat;
+    md3dDevice->CreateShaderResourceView(mTemporalAA->Resource(), &srvDesc, srvCpuHandle);
+    md3dDevice->CreateRenderTargetView(mTemporalAA->Resource(), nullptr, rtvHandle);
     
-    // Depth SRV
-    mSceneDepthSrvIndex = 4;
-    srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
-    srvCpuHandle.Offset(mSceneDepthSrvIndex, mCbvSrvUavDescriptorSize);
-    srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-    md3dDevice->CreateShaderResourceView(mSceneDepthBuffer.Get(), &srvDesc, srvCpuHandle);
+    // TAA History RTV (for copying)
+    rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    rtvHandle.Offset(mTAAHistoryRtvIndex, mRtvDescriptorSize);
+    md3dDevice->CreateRenderTargetView(mTemporalAA->HistoryResource(), nullptr, rtvHandle);
 }
 
 void TAAApp::Update(const GameTimer& gt)
@@ -637,7 +653,12 @@ void TAAApp::ResolveTAA()
     auto taaCB = mCurrFrameResource->TAACB->Resource();
     mCommandList->SetGraphicsRootConstantBufferView(0, taaCB->GetGPUVirtualAddress());
 
-    // Bind textures
+    // Bind all textures for TAA resolve:
+    // t0: Current frame (scene color)
+    // t1: History frame (TAA history)
+    // t2: Motion vectors
+    // t3: Depth map
+    // The descriptor table starts at mSceneColorSrvIndex and contains 4 consecutive SRVs
     CD3DX12_GPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     srvHandle.Offset(mSceneColorSrvIndex, mCbvSrvUavDescriptorSize);
     mCommandList->SetGraphicsRootDescriptorTable(1, srvHandle);
