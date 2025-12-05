@@ -277,7 +277,7 @@ void TerrainApp::Update(const GameTimer& gt)
     memset(mLodCounts, 0, sizeof(mLodCounts));
     for (const auto* node : mVisibleNodes)
     {
-        int lod = std::min(node->LODLevel, 4);
+        int lod = (node->LODLevel < 4) ? node->LODLevel : 4;
         mLodCounts[lod]++;
     }
     mCulledNodes = mQuadTree->GetTotalNodeCount() - (int)mVisibleNodes.size();
@@ -458,7 +458,7 @@ void TerrainApp::DrawTerrain()
         mCommandList->SetGraphicsRootConstantBufferView(0, objCBAddress);
 
         // Select mesh based on node's LOD level
-        int lod = std::min(node->LODLevel, 4);
+        int lod = (node->LODLevel < 4) ? node->LODLevel : 4;
         const char* lodMesh = Terrain::GetLODMeshName(lod);
         auto& submesh = geo->DrawArgs[lodMesh];
 
@@ -562,7 +562,7 @@ void TerrainApp::UpdateObjectCBs(const GameTimer& gt)
         XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
         XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
         objConstants.MaterialIndex = 0;
-        objConstants.LODLevel = std::min(node->LODLevel, 4);
+        objConstants.LODLevel = (node->LODLevel < 4) ? node->LODLevel : 4;
 
         currObjectCB->CopyData((int)i, objConstants);
     }
