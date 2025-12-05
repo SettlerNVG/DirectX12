@@ -18,7 +18,7 @@ cbuffer cbFSR : register(b0)
 };
 
 Texture2D gInputTexture : register(t0);
-SamplerState gsamLinearClamp : register(s0);
+SamplerState gsamLinearClamp : register(s3); // Linear clamp sampler (matches GetStaticSamplers)
 
 struct VertexOut
 {
