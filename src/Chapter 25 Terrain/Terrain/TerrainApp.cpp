@@ -231,9 +231,19 @@ void TerrainApp::Draw(const GameTimer& gt)
     ThrowIfFailed(cmdListAlloc->Reset());
 
     if (mWireframe)
+<<<<<<< Updated upstream
         ThrowIfFailed(mCommandList->Reset(cmdListAlloc.Get(), mPSOs["terrain_wireframe"].Get()));
     else
         ThrowIfFailed(mCommandList->Reset(cmdListAlloc.Get(), mPSOs["terrain"].Get()));
+=======
+    {
+        ThrowIfFailed(mCommandList->Reset(cmdListAlloc.Get(), mPSOs["terrain_wireframe"].Get()));
+    }
+    else
+    {
+        ThrowIfFailed(mCommandList->Reset(cmdListAlloc.Get(), mPSOs["terrain"].Get()));
+    }
+>>>>>>> Stashed changes
 
     mCommandList->RSSetViewports(1, &mScreenViewport);
     mCommandList->RSSetScissorRects(1, &mScissorRect);
