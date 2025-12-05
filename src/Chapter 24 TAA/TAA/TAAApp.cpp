@@ -116,7 +116,6 @@ private:
     ComPtr<ID3D12RootSignature> mTAARootSignature = nullptr;
 
     ComPtr<ID3D12DescriptorHeap> mSrvDescriptorHeap = nullptr;
-    ComPtr<ID3D12DescriptorHeap> mRtvDescriptorHeap = nullptr;
 
     std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
     std::unordered_map<std::string, std::unique_ptr<TAAMaterial>> mMaterials;
@@ -227,7 +226,7 @@ void TAAApp::CreateRtvAndDsvDescriptorHeaps()
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     rtvHeapDesc.NodeMask = 0;
     ThrowIfFailed(md3dDevice->CreateDescriptorHeap(
-        &rtvHeapDesc, IID_PPV_ARGS(mRtvDescriptorHeap.GetAddressOf())));
+        &rtvHeapDesc, IID_PPV_ARGS(mRtvHeap.GetAddressOf())));
 
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc;
     dsvHeapDesc.NumDescriptors = 2; // Main depth + scene depth
@@ -306,7 +305,7 @@ void TAAApp::OnResize()
         IID_PPV_ARGS(&mSceneDepthBuffer)));
 
     // Create scene color RTV
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(SwapChainBufferCount, mRtvDescriptorSize);
     
     mSceneColorRtvIndex = SwapChainBufferCount;
@@ -348,7 +347,7 @@ void TAAApp::OnResize()
     srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     srvCpuHandle.Offset(mMotionVectorSrvIndex, mCbvSrvUavDescriptorSize);
     srvGpuHandle.Offset(mMotionVectorSrvIndex, mCbvSrvUavDescriptorSize);
-    rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mMotionVectorRtvIndex, mRtvDescriptorSize);
     mMotionVectors->BuildDescriptors(srvCpuHandle, srvGpuHandle, rtvHandle);
     
@@ -359,7 +358,7 @@ void TAAApp::OnResize()
     srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     srvCpuHandle.Offset(mTAAOutputSrvIndex, mCbvSrvUavDescriptorSize);
     srvGpuHandle.Offset(mTAAOutputSrvIndex, mCbvSrvUavDescriptorSize);
-    rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mTAAOutputRtvIndex, mRtvDescriptorSize);
     mTemporalAA->BuildDescriptors(srvCpuHandle, srvGpuHandle, rtvHandle, 
         mCbvSrvUavDescriptorSize, mRtvDescriptorSize);
@@ -498,7 +497,7 @@ void TAAApp::DrawSceneToTexture()
         D3D12_RESOURCE_STATE_GENERIC_READ,
         D3D12_RESOURCE_STATE_DEPTH_WRITE));
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mSceneColorRtvIndex, mRtvDescriptorSize);
     
     CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(mDsvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -537,7 +536,7 @@ void TAAApp::DrawMotionVectors()
         D3D12_RESOURCE_STATE_GENERIC_READ,
         D3D12_RESOURCE_STATE_RENDER_TARGET));
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mMotionVectorRtvIndex, mRtvDescriptorSize);
 
     float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -567,7 +566,7 @@ void TAAApp::ResolveTAA()
         D3D12_RESOURCE_STATE_GENERIC_READ,
         D3D12_RESOURCE_STATE_RENDER_TARGET));
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mTAAOutputRtvIndex, mRtvDescriptorSize);
 
     mCommandList->OMSetRenderTargets(1, &rtvHandle, true, nullptr);
