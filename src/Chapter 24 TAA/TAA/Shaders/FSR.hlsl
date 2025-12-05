@@ -203,29 +203,27 @@ float4 PS_RCAS(VertexOut pin) : SV_Target
     return float4(c, 1.0);
 }
 
-// Simple sharpening filter (Unsharp Mask)
-// More stable than CAS, good visual results
+// AMD FidelityFX CAS-style sharpening
+// Contrast Adaptive Sharpening - enhances edges while preserving smooth areas
 float4 PS_FSR(VertexOut pin) : SV_Target
 {
     float2 texelSize = Const1.zw;
     
     // Sample center and 4 neighbors (cross pattern)
-    float3 center = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC, 0).rgb;
-    float3 top    = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(0, -1) * texelSize, 0).rgb;
-    float3 bottom = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(0,  1) * texelSize, 0).rgb;
-    float3 left   = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(-1, 0) * texelSize, 0).rgb;
-    float3 right  = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2( 1, 0) * texelSize, 0).rgb;
+    float3 e = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC, 0).rgb; // center
+    float3 b = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(0, -1) * texelSize, 0).rgb; // top
+    float3 h = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(0,  1) * texelSize, 0).rgb; // bottom
+    float3 d = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2(-1, 0) * texelSize, 0).rgb; // left
+    float3 f = gInputTexture.SampleLevel(gsamLinearClamp, pin.TexC + float2( 1, 0) * texelSize, 0).rgb; // right
     
-    // Calculate blur (average of neighbors)
-    float3 blur = (top + bottom + left + right) * 0.25;
+    // Sharpening strength: RCASSharpness 0.0 = max, 1.0 = none
+    // Multiply by 1.5 for more visible effect
+    float sharpenStrength = 1.5 * (1.0 - RCASSharpness);
     
-    // Sharpening strength: 0.0 = max, 1.0 = none
-    // Convert to actual strength multiplier (0.0 -> 1.0, 1.0 -> 0.0)
-    float strength = 1.0 - RCASSharpness;
+    // Simple unsharp mask - very visible effect
+    float3 blur = (b + d + f + h) * 0.25;
+    float3 sharpened = e + (e - blur) * sharpenStrength;
     
-    // Unsharp mask: center + (center - blur) * strength
-    float3 sharpened = center + (center - blur) * strength;
-    
-    // Clamp to valid range
+    // Clamp to valid color range
     return float4(saturate(sharpened), 1.0);
 }
