@@ -94,6 +94,7 @@
     <ClCompile Include="MotionVectors.cpp" />
     <ClCompile Include="TAAApp.cpp" />
     <ClCompile Include="TemporalAA.cpp" />
+    <ClCompile Include="FSR.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\Common\Camera.h" />
@@ -108,12 +109,14 @@
     <ClInclude Include="FrameResource.h" />
     <ClInclude Include="MotionVectors.h" />
     <ClInclude Include="TemporalAA.h" />
+    <ClInclude Include="FSR.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Shaders\Common.hlsl" />
     <None Include="Shaders\Default.hlsl" />
     <None Include="Shaders\MotionVectors.hlsl" />
     <None Include="Shaders\TAAResolve.hlsl" />
+    <None Include="Shaders\FSR.hlsl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

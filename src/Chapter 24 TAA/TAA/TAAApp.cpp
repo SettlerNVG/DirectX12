@@ -10,6 +10,7 @@
 #include "FrameResource.h"
 #include "TemporalAA.h"
 #include "MotionVectors.h"
+#include "FSR.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -104,6 +105,7 @@ private:
     void DrawSceneToTexture();
     void DrawMotionVectors();
     void ResolveTAA();
+    void ApplyFSR(ID3D12Resource* inputResource, UINT inputSrvIndex);
 
     std::array<const CD3DX12_STATIC_SAMPLER_DESC, 7> GetStaticSamplers();
 
@@ -114,6 +116,7 @@ private:
 
     ComPtr<ID3D12RootSignature> mRootSignature = nullptr;
     ComPtr<ID3D12RootSignature> mTAARootSignature = nullptr;
+    ComPtr<ID3D12RootSignature> mFSRRootSignature = nullptr;
 
     ComPtr<ID3D12DescriptorHeap> mSrvDescriptorHeap = nullptr;
 
@@ -135,6 +138,7 @@ private:
     
     std::unique_ptr<TemporalAA> mTemporalAA;
     std::unique_ptr<MotionVectors> mMotionVectors;
+    std::unique_ptr<FSR> mFSR;
     
     ComPtr<ID3D12Resource> mSceneColorBuffer;
     ComPtr<ID3D12Resource> mSceneDepthBuffer;
@@ -151,6 +155,10 @@ private:
 
     int mFrameIndex = 0;
     bool mTAAEnabled = true;
+    bool mFSREnabled = false;
+    
+    UINT mFSRIntermediateSrvIndex = 0;
+    UINT mFSRIntermediateRtvIndex = 0;
     
     POINT mLastMousePos;
 };
@@ -219,9 +227,9 @@ bool TAAApp::Initialize()
 
 void TAAApp::CreateRtvAndDsvDescriptorHeaps()
 {
-    // Need RTVs for: swap chain buffers + scene color + motion vectors + TAA output + TAA history
+    // Need RTVs for: swap chain buffers + scene color + motion vectors + TAA output + TAA history + FSR intermediate
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc;
-    rtvHeapDesc.NumDescriptors = SwapChainBufferCount + 5;
+    rtvHeapDesc.NumDescriptors = SwapChainBufferCount + 6;
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     rtvHeapDesc.NodeMask = 0;
@@ -247,7 +255,7 @@ void TAAApp::OnResize()
     if(mSrvDescriptorHeap == nullptr)
     {
         D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-        srvHeapDesc.NumDescriptors = 10;
+        srvHeapDesc.NumDescriptors = 12; // Extra for FSR
         srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
@@ -258,6 +266,7 @@ void TAAApp::OnResize()
     {
         mTemporalAA->OnResize(mClientWidth, mClientHeight);
         mMotionVectors->OnResize(mClientWidth, mClientHeight);
+        mFSR->OnResize(mClientWidth, mClientHeight);
     }
     else
     {
@@ -265,6 +274,8 @@ void TAAApp::OnResize()
             md3dDevice.Get(), mClientWidth, mClientHeight, mBackBufferFormat);
         mMotionVectors = std::make_unique<MotionVectors>(
             md3dDevice.Get(), mClientWidth, mClientHeight);
+        mFSR = std::make_unique<FSR>(
+            md3dDevice.Get(), mClientWidth, mClientHeight, mBackBufferFormat, FSRQualityMode::Quality);
     }
 
     // Build scene color buffer
@@ -395,6 +406,17 @@ void TAAApp::OnResize()
     rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvHandle.Offset(mTAAHistoryRtvIndex, mRtvDescriptorSize);
     md3dDevice->CreateRenderTargetView(mTemporalAA->HistoryResource(), nullptr, rtvHandle);
+    
+    // FSR intermediate buffer descriptors
+    mFSRIntermediateSrvIndex = 6;
+    mFSRIntermediateRtvIndex = SwapChainBufferCount + 4;
+    srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    srvCpuHandle.Offset(mFSRIntermediateSrvIndex, mCbvSrvUavDescriptorSize);
+    srvGpuHandle.Offset(mFSRIntermediateSrvIndex, mCbvSrvUavDescriptorSize);
+    rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    rtvHandle.Offset(mFSRIntermediateRtvIndex, mRtvDescriptorSize);
+    mFSR->BuildDescriptors(srvCpuHandle, srvGpuHandle, rtvHandle);
 }
 
 void TAAApp::Update(const GameTimer& gt)
@@ -473,25 +495,63 @@ void TAAApp::Draw(const GameTimer& gt)
         
         ResolveTAA();
         
-        // Copy TAA output to back buffer
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            mTemporalAA->Resource(),
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_COPY_SOURCE));
-        
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            CurrentBackBuffer(),
-            D3D12_RESOURCE_STATE_PRESENT,
-            D3D12_RESOURCE_STATE_COPY_DEST));
+        // Apply FSR sharpening if enabled, otherwise copy directly
+        if(mFSREnabled)
+        {
+            // Transition TAA output to shader resource
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mTemporalAA->Resource(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_GENERIC_READ));
+            
+            // Render FSR directly to back buffer
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_RENDER_TARGET));
+            
+            CD3DX12_CPU_DESCRIPTOR_HANDLE backBufferRtv(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
+            backBufferRtv.Offset(mCurrBackBuffer, mRtvDescriptorSize);
+            mCommandList->OMSetRenderTargets(1, &backBufferRtv, true, nullptr);
+            
+            ApplyFSR(mTemporalAA->Resource(), mTAAOutputSrvIndex);
+            
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PRESENT));
+        }
+        else
+        {
+            // Copy TAA output to back buffer
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mTemporalAA->Resource(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_COPY_SOURCE));
+            
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_COPY_DEST));
 
-        mCommandList->CopyResource(CurrentBackBuffer(), mTemporalAA->Resource());
+            mCommandList->CopyResource(CurrentBackBuffer(), mTemporalAA->Resource());
 
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            CurrentBackBuffer(),
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PRESENT));
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PRESENT));
+        }
         
         // Copy TAA output to history buffer for next frame
+        if(mFSREnabled)
+        {
+            // TAA resource is already in GENERIC_READ state after FSR
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mTemporalAA->Resource(),
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                D3D12_RESOURCE_STATE_COPY_SOURCE));
+        }
+        
         mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
             mTemporalAA->HistoryResource(),
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -511,28 +571,51 @@ void TAAApp::Draw(const GameTimer& gt)
     }
     else
     {
-        // Copy scene color directly to back buffer (no jitter applied when TAA disabled)
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            mSceneColorBuffer.Get(),
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-            D3D12_RESOURCE_STATE_COPY_SOURCE));
-        
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            CurrentBackBuffer(),
-            D3D12_RESOURCE_STATE_PRESENT,
-            D3D12_RESOURCE_STATE_COPY_DEST));
+        // TAA disabled - apply FSR to scene color or copy directly
+        if(mFSREnabled)
+        {
+            // Render FSR directly to back buffer
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_RENDER_TARGET));
+            
+            CD3DX12_CPU_DESCRIPTOR_HANDLE backBufferRtv(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
+            backBufferRtv.Offset(mCurrBackBuffer, mRtvDescriptorSize);
+            mCommandList->OMSetRenderTargets(1, &backBufferRtv, true, nullptr);
+            
+            ApplyFSR(mSceneColorBuffer.Get(), mSceneColorSrvIndex);
+            
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PRESENT));
+        }
+        else
+        {
+            // Copy scene color directly to back buffer (no jitter applied when TAA disabled)
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneColorBuffer.Get(),
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                D3D12_RESOURCE_STATE_COPY_SOURCE));
+            
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_COPY_DEST));
 
-        mCommandList->CopyResource(CurrentBackBuffer(), mSceneColorBuffer.Get());
+            mCommandList->CopyResource(CurrentBackBuffer(), mSceneColorBuffer.Get());
 
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            CurrentBackBuffer(),
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PRESENT));
-        
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-            mSceneColorBuffer.Get(),
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_GENERIC_READ));
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PRESENT));
+            
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneColorBuffer.Get(),
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_GENERIC_READ));
+        }
     }
 
     ThrowIfFailed(mCommandList->Close());
@@ -672,6 +755,27 @@ void TAAApp::ResolveTAA()
     // Note: transition back to GENERIC_READ is done in Draw() before copy
 }
 
+void TAAApp::ApplyFSR(ID3D12Resource* inputResource, UINT inputSrvIndex)
+{
+    mCommandList->SetPipelineState(mPSOs["fsr"].Get());
+    mCommandList->SetGraphicsRootSignature(mFSRRootSignature.Get());
+    
+    // Set FSR constants
+    FSRConstants fsrConstants = mFSR->GetConstants();
+    mCommandList->SetGraphicsRoot32BitConstants(0, sizeof(FSRConstants) / 4, &fsrConstants, 0);
+    
+    // Bind input texture
+    CD3DX12_GPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    srvHandle.Offset(inputSrvIndex, mCbvSrvUavDescriptorSize);
+    mCommandList->SetGraphicsRootDescriptorTable(1, srvHandle);
+    
+    // Draw full-screen triangle
+    mCommandList->IASetVertexBuffers(0, 0, nullptr);
+    mCommandList->IASetIndexBuffer(nullptr);
+    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    mCommandList->DrawInstanced(3, 1, 0, 0);
+}
+
 void TAAApp::OnMouseDown(WPARAM btnState, int x, int y)
 {
     mLastMousePos.x = x;
@@ -728,6 +832,21 @@ void TAAApp::OnKeyboardInput(const GameTimer& gt)
     else
     {
         tKeyPressed = false;
+    }
+    
+    // Toggle FSR with F key
+    static bool fKeyPressed = false;
+    if(GetAsyncKeyState('F') & 0x8000)
+    {
+        if(!fKeyPressed)
+        {
+            mFSREnabled = !mFSREnabled;
+            fKeyPressed = true;
+        }
+    }
+    else
+    {
+        fKeyPressed = false;
     }
 
     mCamera.UpdateViewMatrix();
@@ -988,6 +1107,34 @@ void TAAApp::BuildRootSignature()
         taaSerializedRootSig->GetBufferPointer(),
         taaSerializedRootSig->GetBufferSize(),
         IID_PPV_ARGS(mTAARootSignature.GetAddressOf())));
+
+    // FSR root signature
+    CD3DX12_DESCRIPTOR_RANGE fsrTexTable;
+    fsrTexTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0); // input texture
+
+    CD3DX12_ROOT_PARAMETER fsrRootParameter[2];
+    fsrRootParameter[0].InitAsConstants(sizeof(FSRConstants) / 4, 0); // FSR constants
+    fsrRootParameter[1].InitAsDescriptorTable(1, &fsrTexTable, D3D12_SHADER_VISIBILITY_PIXEL);
+
+    CD3DX12_ROOT_SIGNATURE_DESC fsrRootSigDesc(2, fsrRootParameter,
+        (UINT)staticSamplers.size(), staticSamplers.data(),
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+    ComPtr<ID3DBlob> fsrSerializedRootSig = nullptr;
+    hr = D3D12SerializeRootSignature(&fsrRootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+        fsrSerializedRootSig.GetAddressOf(), errorBlob.GetAddressOf());
+
+    if(errorBlob != nullptr)
+    {
+        ::OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+    }
+    ThrowIfFailed(hr);
+
+    ThrowIfFailed(md3dDevice->CreateRootSignature(
+        0,
+        fsrSerializedRootSig->GetBufferPointer(),
+        fsrSerializedRootSig->GetBufferSize(),
+        IID_PPV_ARGS(mFSRRootSignature.GetAddressOf())));
 }
 
 void TAAApp::BuildDescriptorHeaps()
@@ -1029,6 +1176,9 @@ void TAAApp::BuildShadersAndInputLayout()
     
     mShaders["taaResolveVS"] = d3dUtil::CompileShader(L"Shaders\\TAAResolve.hlsl", nullptr, "VS", "vs_5_1");
     mShaders["taaResolvePS"] = d3dUtil::CompileShader(L"Shaders\\TAAResolve.hlsl", nullptr, "PS", "ps_5_1");
+    
+    mShaders["fsrVS"] = d3dUtil::CompileShader(L"Shaders\\FSR.hlsl", nullptr, "VS", "vs_5_1");
+    mShaders["fsrPS"] = d3dUtil::CompileShader(L"Shaders\\FSR.hlsl", nullptr, "PS_FSR", "ps_5_1");
 
     mInputLayout =
     {
@@ -1214,6 +1364,24 @@ void TAAApp::BuildPSOs()
     taaResolvePsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
     taaResolvePsoDesc.DepthStencilState.DepthEnable = FALSE;
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&taaResolvePsoDesc, IID_PPV_ARGS(&mPSOs["taaResolve"])));
+
+    // FSR PSO (full-screen sharpening pass)
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC fsrPsoDesc = opaquePsoDesc;
+    fsrPsoDesc.pRootSignature = mFSRRootSignature.Get();
+    fsrPsoDesc.InputLayout = { nullptr, 0 };
+    fsrPsoDesc.VS =
+    {
+        reinterpret_cast<BYTE*>(mShaders["fsrVS"]->GetBufferPointer()),
+        mShaders["fsrVS"]->GetBufferSize()
+    };
+    fsrPsoDesc.PS =
+    {
+        reinterpret_cast<BYTE*>(mShaders["fsrPS"]->GetBufferPointer()),
+        mShaders["fsrPS"]->GetBufferSize()
+    };
+    fsrPsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+    fsrPsoDesc.DepthStencilState.DepthEnable = FALSE;
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&fsrPsoDesc, IID_PPV_ARGS(&mPSOs["fsr"])));
 }
 
 void TAAApp::BuildFrameResources()
