@@ -115,7 +115,8 @@ void TemporalAA::SwapBuffers()
 XMFLOAT2 TemporalAA::GetJitter(int frameIndex)
 {
     // Halton sequence (2,3) for 8-sample pattern
-    // This provides good temporal distribution
+    // This provides good temporal distribution and low discrepancy
+    // Based on: https://en.wikipedia.org/wiki/Halton_sequence
     static const XMFLOAT2 haltonSequence[8] = {
         XMFLOAT2(0.5f, 0.333333f),
         XMFLOAT2(0.25f, 0.666667f),
@@ -128,7 +129,9 @@ XMFLOAT2 TemporalAA::GetJitter(int frameIndex)
     };
     
     int index = frameIndex % 8;
-    // Convert from [0,1] to [-0.5, 0.5]
+    
+    // Convert from [0,1] to [-0.5, 0.5] for pixel-centered jitter
+    // This ensures jitter stays within a pixel
     return XMFLOAT2(
         haltonSequence[index].x - 0.5f,
         haltonSequence[index].y - 0.5f

@@ -429,6 +429,32 @@ void TAAApp::Draw(const GameTimer& gt)
     // 3. Apply TAA
     if(mTAAEnabled)
     {
+        // First frame: initialize history buffer with current frame
+        if(mFrameIndex == 0)
+        {
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneColorBuffer.Get(),
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                D3D12_RESOURCE_STATE_COPY_SOURCE));
+            
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mTemporalAA->HistoryResource(),
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                D3D12_RESOURCE_STATE_COPY_DEST));
+            
+            mCommandList->CopyResource(mTemporalAA->HistoryResource(), mSceneColorBuffer.Get());
+            
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneColorBuffer.Get(),
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_GENERIC_READ));
+            
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+                mTemporalAA->HistoryResource(),
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_GENERIC_READ));
+        }
+        
         ResolveTAA();
         
         // Copy TAA output to back buffer
@@ -452,7 +478,7 @@ void TAAApp::Draw(const GameTimer& gt)
         mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
             mTemporalAA->Resource(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET));
+            D3D12_RESOURCE_STATE_GENERIC_READ));
         
         // Swap TAA buffers for next frame
         mTemporalAA->SwapBuffers();
@@ -596,11 +622,8 @@ void TAAApp::ResolveTAA()
     mCommandList->IASetIndexBuffer(nullptr);
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     mCommandList->DrawInstanced(3, 1, 0, 0);
-
-    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-        mTemporalAA->Resource(),
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_GENERIC_READ));
+    
+    // Note: transition back to GENERIC_READ is done in Draw() before copy
 }
 
 void TAAApp::OnMouseDown(WPARAM btnState, int x, int y)
@@ -723,13 +746,19 @@ void TAAApp::UpdateMainPassCB(const GameTimer& gt)
     XMMATRIX view = mCamera.GetView();
     XMMATRIX proj = mCamera.GetProj();
 
-    // Apply jitter to projection matrix
+    // Apply jitter to projection matrix (in NDC space)
     XMFLOAT2 jitter = TemporalAA::GetJitter(mFrameIndex);
-    XMMATRIX jitterMat = XMMatrixTranslation(
-        jitter.x / (float)mClientWidth,
-        jitter.y / (float)mClientHeight,
-        0.0f);
-    proj = XMMatrixMultiply(jitterMat, proj);
+    
+    // Convert pixel jitter to NDC space
+    float jitterX = (2.0f * jitter.x) / (float)mClientWidth;
+    float jitterY = (2.0f * jitter.y) / (float)mClientHeight;
+    
+    // Modify projection matrix directly (offset in third row)
+    XMFLOAT4X4 projMat;
+    XMStoreFloat4x4(&projMat, proj);
+    projMat._31 += jitterX;  // Horizontal offset
+    projMat._32 += jitterY;  // Vertical offset
+    proj = XMLoadFloat4x4(&projMat);
 
     XMMATRIX viewProj = XMMatrixMultiply(view, proj);
     XMMATRIX invView = XMMatrixInverse(&XMMatrixDeterminant(view), view);
@@ -782,7 +811,7 @@ void TAAApp::UpdateTAACB(const GameTimer& gt)
     
     mTAACB.JitterOffset = jitter;
     mTAACB.ScreenSize = XMFLOAT2((float)mClientWidth, (float)mClientHeight);
-    mTAACB.BlendFactor = 0.1f;
+    mTAACB.BlendFactor = 0.05f;  // Lower for more stable history
     mTAACB.MotionScale = 1.0f;
 
     auto currTAACB = mCurrFrameResource->TAACB.get();
