@@ -46,39 +46,40 @@ FSRConstants FSR::GetConstants() const
 {
     FSRConstants constants;
     
-    float inputWidth = (float)mRenderWidth;
-    float inputHeight = (float)mRenderHeight;
-    float outputWidth = (float)mOutputWidth;
-    float outputHeight = (float)mOutputHeight;
+    // For sharpening-only mode, use output resolution for texel sizes
+    float width = (float)mOutputWidth;
+    float height = (float)mOutputHeight;
     
-    // Const0: scaling factors
+    // Const0: scaling factors (1:1 for sharpening only)
     constants.Const0 = XMFLOAT4(
-        inputWidth / outputWidth,
-        inputHeight / outputHeight,
-        0.5f * inputWidth / outputWidth - 0.5f,
-        0.5f * inputHeight / outputHeight - 0.5f
+        1.0f,
+        1.0f,
+        0.0f,
+        0.0f
     );
     
-    // Const1: texel sizes
+    // Const1: texel sizes - THIS IS WHAT THE SHADER USES
+    // xy = input texel size, zw = output texel size
+    // For sharpening, input = output
     constants.Const1 = XMFLOAT4(
-        1.0f / inputWidth,
-        1.0f / inputHeight,
-        1.0f / outputWidth,
-        1.0f / outputHeight
+        1.0f / width,
+        1.0f / height,
+        1.0f / width,
+        1.0f / height
     );
     
     // Const2: additional sampling offsets
     constants.Const2 = XMFLOAT4(
-        -1.0f / inputWidth,
-        2.0f / inputHeight,
-        1.0f / inputWidth,
-        2.0f / inputHeight
+        -1.0f / width,
+        2.0f / height,
+        1.0f / width,
+        2.0f / height
     );
     
     // Const3: more offsets
     constants.Const3 = XMFLOAT4(
         0.0f,
-        4.0f / inputHeight,
+        4.0f / height,
         0.0f,
         0.0f
     );
