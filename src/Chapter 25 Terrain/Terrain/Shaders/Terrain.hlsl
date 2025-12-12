@@ -58,6 +58,7 @@ cbuffer cbTerrain : register(b2)
 Texture2D gHeightMap : register(t0);
 Texture2D gDiffuseMap : register(t1);
 Texture2D gNormalMap : register(t2);
+Texture2D gPaintMap : register(t3);
 
 SamplerState gsamLinearWrap : register(s0);
 SamplerState gsamLinearClamp : register(s1);
@@ -136,8 +137,11 @@ float4 PS(VertexOut pin) : SV_Target
     // Sample diffuse texture (Weathering_Out.dds)
     float4 diffuseColor = gDiffuseMap.Sample(gsamLinearClamp, pin.TexC);
     
-    // Use texture color directly
-    float3 albedo = diffuseColor.rgb;
+    // Sample paint texture
+    float4 paintColor = gPaintMap.Sample(gsamLinearClamp, pin.TexC);
+    
+    // Blend diffuse and paint based on paint alpha
+    float3 albedo = lerp(diffuseColor.rgb, paintColor.rgb, paintColor.a);
     
     // Normal from heightmap
     float3 normal = normalize(pin.NormalW);
@@ -151,6 +155,12 @@ float4 PS(VertexOut pin) : SV_Target
     float3 diffuse = gLights[0].Strength * NdotL;
     
     float3 finalColor = (ambient + diffuse) * albedo;
+    
+    // Debug: Show paint areas more clearly
+    if (paintColor.a > 0.1)
+    {
+        finalColor = lerp(finalColor, paintColor.rgb * 1.5, paintColor.a * 0.5);
+    }
     
     return float4(finalColor, 1.0);
 }
