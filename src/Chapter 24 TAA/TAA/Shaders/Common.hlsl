@@ -50,6 +50,7 @@ struct MaterialData
 cbuffer cbPerObject : register(b0)
 {
     float4x4 gWorld;
+    float4x4 gPrevWorld;  // Previous frame world matrix for motion vectors
     float4x4 gTexTransform;
     uint gMaterialIndex;
     uint gObjPad0;

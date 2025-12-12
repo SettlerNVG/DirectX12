@@ -46,6 +46,7 @@ struct RenderItem
     RenderItem(const RenderItem& rhs) = delete;
  
     XMFLOAT4X4 World = MathHelper::Identity4x4();
+    XMFLOAT4X4 PrevWorld = MathHelper::Identity4x4();  // Previous frame world matrix for motion vectors
     XMFLOAT4X4 TexTransform = MathHelper::Identity4x4();
     int NumFramesDirty = gNumFrameResources;
     UINT ObjCBIndex = -1;
@@ -854,6 +855,24 @@ void TAAApp::OnKeyboardInput(const GameTimer& gt)
 
 void TAAApp::AnimateMaterials(const GameTimer& gt)
 {
+    // Animate the first cylinder (index 1 in mAllRitems, after grid)
+    // Grid is at index 0, first left cylinder is at index 1
+    if(mAllRitems.size() > 1)
+    {
+        auto& cylinder = mAllRitems[1];
+        
+        // Save current world as previous world BEFORE updating
+        cylinder->PrevWorld = cylinder->World;
+        
+        // Animate: move back and forth along X axis (slower for better TAA)
+        float time = gt.TotalTime();
+        float offsetX = sinf(time * 0.5f) * 2.0f;  // Slower oscillation, smaller amplitude
+        
+        XMMATRIX world = XMMatrixTranslation(-5.0f + offsetX, 1.5f, -10.0f);
+        XMStoreFloat4x4(&cylinder->World, world);
+        
+        cylinder->NumFramesDirty = gNumFrameResources;
+    }
 }
 
 void TAAApp::UpdateObjectCBs(const GameTimer& gt)
@@ -861,20 +880,21 @@ void TAAApp::UpdateObjectCBs(const GameTimer& gt)
     auto currObjectCB = mCurrFrameResource->ObjectCB.get();
     for(auto& e : mAllRitems)
     {
+        // Always update all objects to ensure PrevWorld is correct for motion vectors
+        XMMATRIX world = XMLoadFloat4x4(&e->World);
+        XMMATRIX prevWorld = XMLoadFloat4x4(&e->PrevWorld);
+        XMMATRIX texTransform = XMLoadFloat4x4(&e->TexTransform);
+
+        ObjectConstants objConstants;
+        XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
+        XMStoreFloat4x4(&objConstants.PrevWorld, XMMatrixTranspose(prevWorld));
+        XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
+        objConstants.MaterialIndex = e->Mat->MatCBIndex;
+
+        currObjectCB->CopyData(e->ObjCBIndex, objConstants);
+
         if(e->NumFramesDirty > 0)
-        {
-            XMMATRIX world = XMLoadFloat4x4(&e->World);
-            XMMATRIX texTransform = XMLoadFloat4x4(&e->TexTransform);
-
-            ObjectConstants objConstants;
-            XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
-            XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
-            objConstants.MaterialIndex = e->Mat->MatCBIndex;
-
-            currObjectCB->CopyData(e->ObjCBIndex, objConstants);
-
             e->NumFramesDirty--;
-        }
     }
 }
 
@@ -1441,6 +1461,7 @@ void TAAApp::BuildRenderItems()
 {
     auto gridRitem = std::make_unique<RenderItem>();
     gridRitem->World = MathHelper::Identity4x4();
+    gridRitem->PrevWorld = MathHelper::Identity4x4();  // Initialize PrevWorld
     gridRitem->ObjCBIndex = 0;
     gridRitem->Mat = mMaterials["white"].get();
     gridRitem->Geo = mGeometries["shapeGeo"].get();
@@ -1466,6 +1487,7 @@ void TAAApp::BuildRenderItems()
         XMMATRIX rightSphereWorld = XMMatrixTranslation(+5.0f, 3.5f, -10.0f + i*5.0f);
 
         XMStoreFloat4x4(&leftCylRitem->World, leftCylWorld);
+        XMStoreFloat4x4(&leftCylRitem->PrevWorld, leftCylWorld);  // Initialize PrevWorld
         leftCylRitem->ObjCBIndex = objCBIndex++;
         leftCylRitem->Mat = mMaterials["red"].get();
         leftCylRitem->Geo = mGeometries["shapeGeo"].get();
@@ -1475,6 +1497,7 @@ void TAAApp::BuildRenderItems()
         leftCylRitem->BaseVertexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].BaseVertexLocation;
 
         XMStoreFloat4x4(&rightCylRitem->World, rightCylWorld);
+        XMStoreFloat4x4(&rightCylRitem->PrevWorld, rightCylWorld);  // Initialize PrevWorld
         rightCylRitem->ObjCBIndex = objCBIndex++;
         rightCylRitem->Mat = mMaterials["green"].get();
         rightCylRitem->Geo = mGeometries["shapeGeo"].get();
@@ -1484,6 +1507,7 @@ void TAAApp::BuildRenderItems()
         rightCylRitem->BaseVertexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].BaseVertexLocation;
 
         XMStoreFloat4x4(&leftSphereRitem->World, leftSphereWorld);
+        XMStoreFloat4x4(&leftSphereRitem->PrevWorld, leftSphereWorld);  // Initialize PrevWorld
         leftSphereRitem->ObjCBIndex = objCBIndex++;
         leftSphereRitem->Mat = mMaterials["blue"].get();
         leftSphereRitem->Geo = mGeometries["shapeGeo"].get();
@@ -1493,6 +1517,7 @@ void TAAApp::BuildRenderItems()
         leftSphereRitem->BaseVertexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].BaseVertexLocation;
 
         XMStoreFloat4x4(&rightSphereRitem->World, rightSphereWorld);
+        XMStoreFloat4x4(&rightSphereRitem->PrevWorld, rightSphereWorld);  // Initialize PrevWorld
         rightSphereRitem->ObjCBIndex = objCBIndex++;
         rightSphereRitem->Mat = mMaterials["red"].get();
         rightSphereRitem->Geo = mGeometries["shapeGeo"].get();
