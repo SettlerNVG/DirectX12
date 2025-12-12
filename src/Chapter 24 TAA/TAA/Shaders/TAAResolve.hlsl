@@ -1,5 +1,6 @@
 //***************************************************************************************
 // TAAResolve.hlsl - Temporal Anti-Aliasing resolve pass
+//
 // Based on:
 // - https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/
 // - https://sugulee.wordpress.com/2021/06/21/temporal-anti-aliasingtaa-tutorial/
@@ -10,8 +11,8 @@ cbuffer cbTAA : register(b0)
 {
     float2 gJitterOffset;
     float2 gScreenSize;
-    float gBlendFactor;      // Typically 0.05-0.1
-    float gMotionScale;      // Scale for motion vectors
+    float gBlendFactor;
+    float gMotionScale;
     float2 gPadding;
 };
 
@@ -20,10 +21,7 @@ Texture2D gHistoryFrame  : register(t1);
 Texture2D gMotionVectors : register(t2);
 Texture2D gDepthMap      : register(t3);
 
-// Samplers match GetStaticSamplers() in TAAApp.cpp
-SamplerState gsamPointWrap   : register(s0);
 SamplerState gsamPointClamp  : register(s1);
-SamplerState gsamLinearWrap  : register(s2);
 SamplerState gsamLinearClamp : register(s3);
 
 struct VertexOut
@@ -32,93 +30,117 @@ struct VertexOut
     float2 TexC  : TEXCOORD;
 };
 
+// YCoCg color space for better clamping
+float3 RGBToYCoCg(float3 rgb)
+{
+    return float3(
+         0.25f * rgb.r + 0.5f * rgb.g + 0.25f * rgb.b,
+         0.5f  * rgb.r - 0.5f  * rgb.b,
+        -0.25f * rgb.r + 0.5f * rgb.g - 0.25f * rgb.b
+    );
+}
+
+float3 YCoCgToRGB(float3 ycocg)
+{
+    return float3(
+        ycocg.x + ycocg.y - ycocg.z,
+        ycocg.x + ycocg.z,
+        ycocg.x - ycocg.y - ycocg.z
+    );
+}
+
 VertexOut VS(uint vid : SV_VertexID)
 {
     VertexOut vout;
-    
-    // Full-screen triangle
     vout.TexC = float2((vid << 1) & 2, vid & 2);
     vout.PosH = float4(vout.TexC * float2(2, -2) + float2(-1, 1), 0, 1);
-    
     return vout;
+}
+
+// Velocity dilation - get the largest velocity in 3x3 neighborhood
+// This fixes trailing edge artifacts on moving objects
+float2 GetDilatedVelocity(float2 uv, float2 texelSize)
+{
+    float2 maxVel = float2(0, 0);
+    float maxLenSq = 0;
+    
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float2 vel = gMotionVectors.Sample(gsamPointClamp, uv + float2(x, y) * texelSize).rg;
+            float lenSq = dot(vel, vel);
+            if (lenSq > maxLenSq)
+            {
+                maxLenSq = lenSq;
+                maxVel = vel;
+            }
+        }
+    }
+    return maxVel;
 }
 
 float4 PS(VertexOut pin) : SV_Target
 {
-    float2 texCoord = pin.TexC;
-    float2 texelSize = 1.0 / gScreenSize;
+    float2 uv = pin.TexC;
+    float2 texelSize = 1.0f / gScreenSize;
     
-    // Sample current frame directly (no unjitter needed - pixels are already rendered correctly)
-    float3 currentColor = gCurrentFrame.Sample(gsamPointClamp, texCoord).rgb;
+    // Sample current frame
+    float3 currentRGB = gCurrentFrame.Sample(gsamPointClamp, uv).rgb;
     
-    // Sample motion vector
-    float2 velocity = gMotionVectors.Sample(gsamPointClamp, texCoord).rg;
+    // Get dilated velocity - fixes trailing edge on moving objects
+    float2 velocity = GetDilatedVelocity(uv, texelSize);
+    float2 historyUV = uv + velocity;
     
-    // Calculate history texture coordinate
-    // Motion vectors point from current to previous position
-    float2 historyTexCoord = texCoord + velocity;
-    
-    // Check if history sample is valid (within screen bounds)
-    bool validHistory = all(historyTexCoord >= 0.0) && all(historyTexCoord <= 1.0);
-    
-    if (!validHistory)
+    // Bounds check
+    if (any(historyUV < 0.0f) || any(historyUV > 1.0f))
     {
-        // No valid history, use current frame
-        return float4(currentColor, 1.0);
+        return float4(currentRGB, 1.0f);
     }
     
-    // Sample history with bilinear filtering
-    float3 historyColor = gHistoryFrame.Sample(gsamLinearClamp, historyTexCoord).rgb;
+    // Sample history
+    float3 historyRGB = gHistoryFrame.Sample(gsamLinearClamp, historyUV).rgb;
     
-    // Neighborhood sampling for min/max clipping (3x3)
-    // Also calculate mean and variance for better clamping
-    float3 colorMin = currentColor;
-    float3 colorMax = currentColor;
-    float3 colorSum = currentColor;
-    float3 colorSumSq = currentColor * currentColor;
+    // Gather 3x3 neighborhood statistics in YCoCg space
+    float3 m1 = float3(0, 0, 0);
+    float3 m2 = float3(0, 0, 0);
     
     [unroll]
-    for (int dy = -1; dy <= 1; ++dy)
+    for (int y = -1; y <= 1; ++y)
     {
         [unroll]
-        for (int dx = -1; dx <= 1; ++dx)
+        for (int x = -1; x <= 1; ++x)
         {
-            if (dx == 0 && dy == 0) continue;
-            
-            float2 offset = float2(dx, dy) * texelSize;
-            float3 neighborColor = gCurrentFrame.Sample(gsamPointClamp, texCoord + offset).rgb;
-            
-            colorMin = min(colorMin, neighborColor);
-            colorMax = max(colorMax, neighborColor);
-            colorSum += neighborColor;
-            colorSumSq += neighborColor * neighborColor;
+            float3 s = gCurrentFrame.Sample(gsamPointClamp, uv + float2(x, y) * texelSize).rgb;
+            float3 sYCoCg = RGBToYCoCg(s);
+            m1 += sYCoCg;
+            m2 += sYCoCg * sYCoCg;
         }
     }
     
-    // Calculate mean and standard deviation
-    float3 colorMean = colorSum / 9.0;
-    float3 colorVariance = (colorSumSq / 9.0) - (colorMean * colorMean);
-    float3 colorStdDev = sqrt(max(colorVariance, 0.0));
+    m1 /= 9.0f;
+    m2 /= 9.0f;
+    float3 sigma = sqrt(max(m2 - m1 * m1, 0.0f));
     
-    // Use variance-based clipping with gamma factor
-    // Larger gamma = less aggressive clamping = more stable but potential ghosting
-    float gamma = 1.25;
-    float3 aabbMin = colorMean - gamma * colorStdDev;
-    float3 aabbMax = colorMean + gamma * colorStdDev;
+    // Variance clipping bounds
+    // Use wider bounds (higher gamma) to allow more history blending for AA
+    float velocityPixels = length(velocity * gScreenSize);
+    float gamma = lerp(1.5f, 2.5f, saturate(velocityPixels * 0.1f));
+    float3 aabbMin = m1 - gamma * sigma;
+    float3 aabbMax = m1 + gamma * sigma;
     
-    // Clamp history to variance-based AABB (reduces ghosting while maintaining stability)
-    historyColor = clamp(historyColor, aabbMin, aabbMax);
+    // Clamp history in YCoCg space
+    float3 historyYCoCg = RGBToYCoCg(historyRGB);
+    historyYCoCg = clamp(historyYCoCg, aabbMin, aabbMax);
+    historyRGB = YCoCgToRGB(historyYCoCg);
     
-    // Adaptive blend factor based on motion
-    float motionLength = length(velocity * gScreenSize);
-    float adaptiveBlend = gBlendFactor;
+    // Blend factor - keep low for good AA accumulation
+    float blend = gBlendFactor;
     
-    // Increase blend factor for fast motion (less history)
-    adaptiveBlend = lerp(adaptiveBlend, 0.5, saturate(motionLength / 20.0));
+    // Final blend
+    float3 finalColor = lerp(historyRGB, currentRGB, blend);
     
-    // Temporal blend: lerp(history, current, blend)
-    // Lower blend = more history (smoother), higher blend = more current (sharper)
-    float3 finalColor = lerp(historyColor, currentColor, adaptiveBlend);
-    
-    return float4(finalColor, 1.0);
+    return float4(finalColor, 1.0f);
 }

@@ -10,7 +10,8 @@
 #include "FrameResource.h"
 #include "TemporalAA.h"
 #include "MotionVectors.h"
-#include "FSR.h"
+#include "FSR3Upscaler.h"
+#include <cstdio>
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -46,6 +47,7 @@ struct RenderItem
     RenderItem(const RenderItem& rhs) = delete;
  
     XMFLOAT4X4 World = MathHelper::Identity4x4();
+    XMFLOAT4X4 PrevWorld = MathHelper::Identity4x4();  // Previous frame world matrix for motion vectors
     XMFLOAT4X4 TexTransform = MathHelper::Identity4x4();
     int NumFramesDirty = gNumFrameResources;
     UINT ObjCBIndex = -1;
@@ -105,7 +107,7 @@ private:
     void DrawSceneToTexture();
     void DrawMotionVectors();
     void ResolveTAA();
-    void ApplyFSR(ID3D12Resource* inputResource, UINT inputSrvIndex);
+    void ApplyFSR3();
 
     std::array<const CD3DX12_STATIC_SAMPLER_DESC, 7> GetStaticSamplers();
 
@@ -116,7 +118,6 @@ private:
 
     ComPtr<ID3D12RootSignature> mRootSignature = nullptr;
     ComPtr<ID3D12RootSignature> mTAARootSignature = nullptr;
-    ComPtr<ID3D12RootSignature> mFSRRootSignature = nullptr;
 
     ComPtr<ID3D12DescriptorHeap> mSrvDescriptorHeap = nullptr;
 
@@ -138,10 +139,11 @@ private:
     
     std::unique_ptr<TemporalAA> mTemporalAA;
     std::unique_ptr<MotionVectors> mMotionVectors;
-    std::unique_ptr<FSR> mFSR;
+    std::unique_ptr<FSR3Upscaler> mFSR3;
     
     ComPtr<ID3D12Resource> mSceneColorBuffer;
     ComPtr<ID3D12Resource> mSceneDepthBuffer;
+    ComPtr<ID3D12Resource> mFSR3OutputBuffer;
 
     UINT mSceneColorSrvIndex = 0;
     UINT mSceneColorRtvIndex = 0;
@@ -155,10 +157,10 @@ private:
 
     int mFrameIndex = 0;
     bool mTAAEnabled = true;
-    bool mFSREnabled = false;
+    bool mFSR3Enabled = false;
+    bool mFSR3NeedsReset = true;
     
-    UINT mFSRIntermediateSrvIndex = 0;
-    UINT mFSRIntermediateRtvIndex = 0;
+    UINT mFSR3OutputUavIndex = 0;
     
     POINT mLastMousePos;
 };
@@ -170,6 +172,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
 #if defined(DEBUG) | defined(_DEBUG)
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif
+
+    // Create console window for debug output
+    AllocConsole();
+    FILE* pCout;
+    freopen_s(&pCout, "CONOUT$", "w", stdout);
+    printf("=== TAA / FSR 3 Demo ===\n");
+    printf("Controls:\n");
+    printf("  WASD - Move camera\n");
+    printf("  Mouse - Look around\n");
+    printf("  T - Toggle TAA (Temporal Anti-Aliasing)\n");
+    printf("  F - Toggle FSR 3 (AMD FidelityFX Super Resolution)\n");
+    printf("\n");
+    printf("Note: TAA and FSR3 are mutually exclusive.\n");
+    printf("\n");
 
     try
     {
@@ -266,7 +282,8 @@ void TAAApp::OnResize()
     {
         mTemporalAA->OnResize(mClientWidth, mClientHeight);
         mMotionVectors->OnResize(mClientWidth, mClientHeight);
-        mFSR->OnResize(mClientWidth, mClientHeight);
+        if(mFSR3)
+            mFSR3->OnResize(mClientWidth, mClientHeight);
     }
     else
     {
@@ -274,8 +291,13 @@ void TAAApp::OnResize()
             md3dDevice.Get(), mClientWidth, mClientHeight, mBackBufferFormat);
         mMotionVectors = std::make_unique<MotionVectors>(
             md3dDevice.Get(), mClientWidth, mClientHeight);
-        mFSR = std::make_unique<FSR>(
-            md3dDevice.Get(), mClientWidth, mClientHeight, mBackBufferFormat, FSRQualityMode::Quality);
+        
+        // Initialize FSR3
+        mFSR3 = std::make_unique<FSR3Upscaler>();
+        if(!mFSR3->Initialize(md3dDevice.Get(), mClientWidth, mClientHeight, FSR3QualityMode::NativeAA))
+        {
+            printf("Warning: FSR3 initialization failed!\n");
+        }
     }
 
     // Build scene color buffer
@@ -407,16 +429,36 @@ void TAAApp::OnResize()
     rtvHandle.Offset(mTAAHistoryRtvIndex, mRtvDescriptorSize);
     md3dDevice->CreateRenderTargetView(mTemporalAA->HistoryResource(), nullptr, rtvHandle);
     
-    // FSR intermediate buffer descriptors
-    mFSRIntermediateSrvIndex = 6;
-    mFSRIntermediateRtvIndex = SwapChainBufferCount + 4;
+    // FSR3 output buffer with UAV support
+    D3D12_RESOURCE_DESC fsr3OutputDesc = {};
+    fsr3OutputDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    fsr3OutputDesc.Width = mClientWidth;
+    fsr3OutputDesc.Height = mClientHeight;
+    fsr3OutputDesc.DepthOrArraySize = 1;
+    fsr3OutputDesc.MipLevels = 1;
+    fsr3OutputDesc.Format = mBackBufferFormat;
+    fsr3OutputDesc.SampleDesc.Count = 1;
+    fsr3OutputDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    fsr3OutputDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;  // Required for FSR3 compute output
+
+    ThrowIfFailed(md3dDevice->CreateCommittedResource(
+        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        D3D12_HEAP_FLAG_NONE,
+        &fsr3OutputDesc,
+        D3D12_RESOURCE_STATE_COPY_SOURCE,
+        nullptr,
+        IID_PPV_ARGS(&mFSR3OutputBuffer)));
+
+    // FSR3 output UAV descriptor
+    mFSR3OutputUavIndex = 6;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+    uavDesc.Format = mBackBufferFormat;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    uavDesc.Texture2D.MipSlice = 0;
+    
     srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
-    srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-    srvCpuHandle.Offset(mFSRIntermediateSrvIndex, mCbvSrvUavDescriptorSize);
-    srvGpuHandle.Offset(mFSRIntermediateSrvIndex, mCbvSrvUavDescriptorSize);
-    rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
-    rtvHandle.Offset(mFSRIntermediateRtvIndex, mRtvDescriptorSize);
-    mFSR->BuildDescriptors(srvCpuHandle, srvGpuHandle, rtvHandle);
+    srvCpuHandle.Offset(mFSR3OutputUavIndex, mCbvSrvUavDescriptorSize);
+    md3dDevice->CreateUnorderedAccessView(mFSR3OutputBuffer.Get(), nullptr, &uavDesc, srvCpuHandle);
 }
 
 void TAAApp::Update(const GameTimer& gt)
@@ -464,7 +506,7 @@ void TAAApp::Draw(const GameTimer& gt)
     // 2. Generate motion vectors
     DrawMotionVectors();
 
-    // 3. Apply TAA
+    // 3. Apply TAA or FSR3
     if(mTAAEnabled)
     {
         // First frame: initialize history buffer with current frame
@@ -495,63 +537,25 @@ void TAAApp::Draw(const GameTimer& gt)
         
         ResolveTAA();
         
-        // Apply FSR sharpening if enabled, otherwise copy directly
-        if(mFSREnabled)
-        {
-            // Transition TAA output to shader resource
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                mTemporalAA->Resource(),
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_GENERIC_READ));
-            
-            // Render FSR directly to back buffer
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                CurrentBackBuffer(),
-                D3D12_RESOURCE_STATE_PRESENT,
-                D3D12_RESOURCE_STATE_RENDER_TARGET));
-            
-            CD3DX12_CPU_DESCRIPTOR_HANDLE backBufferRtv(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
-            backBufferRtv.Offset(mCurrBackBuffer, mRtvDescriptorSize);
-            mCommandList->OMSetRenderTargets(1, &backBufferRtv, true, nullptr);
-            
-            ApplyFSR(mTemporalAA->Resource(), mTAAOutputSrvIndex);
-            
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                CurrentBackBuffer(),
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_PRESENT));
-        }
-        else
-        {
-            // Copy TAA output to back buffer
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                mTemporalAA->Resource(),
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_COPY_SOURCE));
-            
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                CurrentBackBuffer(),
-                D3D12_RESOURCE_STATE_PRESENT,
-                D3D12_RESOURCE_STATE_COPY_DEST));
+        // Copy TAA output to back buffer
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            mTemporalAA->Resource(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_COPY_SOURCE));
+        
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            CurrentBackBuffer(),
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_DEST));
 
-            mCommandList->CopyResource(CurrentBackBuffer(), mTemporalAA->Resource());
+        mCommandList->CopyResource(CurrentBackBuffer(), mTemporalAA->Resource());
 
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                CurrentBackBuffer(),
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PRESENT));
-        }
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            CurrentBackBuffer(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PRESENT));
         
         // Copy TAA output to history buffer for next frame
-        if(mFSREnabled)
-        {
-            // TAA resource is already in GENERIC_READ state after FSR
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                mTemporalAA->Resource(),
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                D3D12_RESOURCE_STATE_COPY_SOURCE));
-        }
-        
         mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
             mTemporalAA->HistoryResource(),
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -569,53 +573,53 @@ void TAAApp::Draw(const GameTimer& gt)
             D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_GENERIC_READ));
     }
+    else if(mFSR3Enabled && mFSR3 && mFSR3->IsInitialized())
+    {
+        // FSR3 - AMD FidelityFX Super Resolution
+        ApplyFSR3();
+        
+        // Copy FSR3 output to back buffer
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            CurrentBackBuffer(),
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_DEST));
+
+        mCommandList->CopyResource(CurrentBackBuffer(), mFSR3OutputBuffer.Get());
+
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            CurrentBackBuffer(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PRESENT));
+        
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            mFSR3OutputBuffer.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COPY_SOURCE));
+    }
     else
     {
-        // TAA disabled - apply FSR to scene color or copy directly
-        if(mFSREnabled)
-        {
-            // Render FSR directly to back buffer
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                CurrentBackBuffer(),
-                D3D12_RESOURCE_STATE_PRESENT,
-                D3D12_RESOURCE_STATE_RENDER_TARGET));
-            
-            CD3DX12_CPU_DESCRIPTOR_HANDLE backBufferRtv(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
-            backBufferRtv.Offset(mCurrBackBuffer, mRtvDescriptorSize);
-            mCommandList->OMSetRenderTargets(1, &backBufferRtv, true, nullptr);
-            
-            ApplyFSR(mSceneColorBuffer.Get(), mSceneColorSrvIndex);
-            
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                CurrentBackBuffer(),
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_PRESENT));
-        }
-        else
-        {
-            // Copy scene color directly to back buffer (no jitter applied when TAA disabled)
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                mSceneColorBuffer.Get(),
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                D3D12_RESOURCE_STATE_COPY_SOURCE));
-            
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                CurrentBackBuffer(),
-                D3D12_RESOURCE_STATE_PRESENT,
-                D3D12_RESOURCE_STATE_COPY_DEST));
+        // No AA - copy scene color directly to back buffer
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneColorBuffer.Get(),
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            D3D12_RESOURCE_STATE_COPY_SOURCE));
+        
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            CurrentBackBuffer(),
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_DEST));
 
-            mCommandList->CopyResource(CurrentBackBuffer(), mSceneColorBuffer.Get());
+        mCommandList->CopyResource(CurrentBackBuffer(), mSceneColorBuffer.Get());
 
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                CurrentBackBuffer(),
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PRESENT));
-            
-            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
-                mSceneColorBuffer.Get(),
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-                D3D12_RESOURCE_STATE_GENERIC_READ));
-        }
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            CurrentBackBuffer(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PRESENT));
+        
+        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneColorBuffer.Get(),
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_GENERIC_READ));
     }
 
     ThrowIfFailed(mCommandList->Close());
@@ -755,25 +759,68 @@ void TAAApp::ResolveTAA()
     // Note: transition back to GENERIC_READ is done in Draw() before copy
 }
 
-void TAAApp::ApplyFSR(ID3D12Resource* inputResource, UINT inputSrvIndex)
+void TAAApp::ApplyFSR3()
 {
-    mCommandList->SetPipelineState(mPSOs["fsr"].Get());
-    mCommandList->SetGraphicsRootSignature(mFSRRootSignature.Get());
+    if(!mFSR3 || !mFSR3->IsInitialized())
+        return;
+
+    // Get jitter from FSR3
+    float jitterX, jitterY;
+    mFSR3->GetJitterOffset(mFrameIndex, jitterX, jitterY);
+
+    // Transition resources for FSR3 compute
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneColorBuffer.Get(),
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     
-    // Set FSR constants
-    FSRConstants fsrConstants = mFSR->GetConstants();
-    mCommandList->SetGraphicsRoot32BitConstants(0, sizeof(FSRConstants) / 4, &fsrConstants, 0);
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneDepthBuffer.Get(),
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     
-    // Bind input texture
-    CD3DX12_GPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-    srvHandle.Offset(inputSrvIndex, mCbvSrvUavDescriptorSize);
-    mCommandList->SetGraphicsRootDescriptorTable(1, srvHandle);
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mMotionVectors->Resource(),
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     
-    // Draw full-screen triangle
-    mCommandList->IASetVertexBuffers(0, 0, nullptr);
-    mCommandList->IASetIndexBuffer(nullptr);
-    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    mCommandList->DrawInstanced(3, 1, 0, 0);
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mFSR3OutputBuffer.Get(),
+        D3D12_RESOURCE_STATE_COPY_SOURCE,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+
+    // Dispatch FSR3
+    mFSR3->Dispatch(
+        mCommandList.Get(),
+        mSceneColorBuffer.Get(),
+        mSceneDepthBuffer.Get(),
+        mMotionVectors->Resource(),
+        mFSR3OutputBuffer.Get(),
+        jitterX, jitterY,
+        mMainPassCB.DeltaTime * 1000.0f,  // Convert to milliseconds
+        mMainPassCB.NearZ,
+        mMainPassCB.FarZ,
+        0.25f * MathHelper::Pi,  // FOV
+        mFSR3NeedsReset
+    );
+    
+    mFSR3NeedsReset = false;
+
+    // Transition resources back
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneColorBuffer.Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_GENERIC_READ));
+    
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneDepthBuffer.Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_GENERIC_READ));
+    
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mMotionVectors->Resource(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_GENERIC_READ));
 }
 
 void TAAApp::OnMouseDown(WPARAM btnState, int x, int y)
@@ -819,13 +866,16 @@ void TAAApp::OnKeyboardInput(const GameTimer& gt)
     if(GetAsyncKeyState('D') & 0x8000)
         mCamera.Strafe(10.0f*dt);
 
-    // Toggle TAA with T key
+    // Toggle TAA with T key (disables FSR3)
     static bool tKeyPressed = false;
     if(GetAsyncKeyState('T') & 0x8000)
     {
         if(!tKeyPressed)
         {
             mTAAEnabled = !mTAAEnabled;
+            if (mTAAEnabled)
+                mFSR3Enabled = false;  // Disable FSR3 when TAA is enabled
+            printf("TAA: %s\n", mTAAEnabled ? "ON" : "OFF");
             tKeyPressed = true;
         }
     }
@@ -834,13 +884,19 @@ void TAAApp::OnKeyboardInput(const GameTimer& gt)
         tKeyPressed = false;
     }
     
-    // Toggle FSR with F key
+    // Toggle FSR3 with F key (disables TAA)
     static bool fKeyPressed = false;
     if(GetAsyncKeyState('F') & 0x8000)
     {
         if(!fKeyPressed)
         {
-            mFSREnabled = !mFSREnabled;
+            mFSR3Enabled = !mFSR3Enabled;
+            if (mFSR3Enabled)
+            {
+                mTAAEnabled = false;  // Disable TAA when FSR3 is enabled
+                mFSR3NeedsReset = true;  // Reset history when enabling FSR3
+            }
+            printf("FSR 3 (AMD FidelityFX): %s\n", mFSR3Enabled ? "ON" : "OFF");
             fKeyPressed = true;
         }
     }
@@ -854,6 +910,24 @@ void TAAApp::OnKeyboardInput(const GameTimer& gt)
 
 void TAAApp::AnimateMaterials(const GameTimer& gt)
 {
+    // Animate the first cylinder (index 1 in mAllRitems, after grid)
+    // Grid is at index 0, first left cylinder is at index 1
+    if(mAllRitems.size() > 1)
+    {
+        auto& cylinder = mAllRitems[1];
+        
+        // Save current world as previous world BEFORE updating
+        cylinder->PrevWorld = cylinder->World;
+        
+        // Animate: move back and forth along X axis (slower for better TAA)
+        float time = gt.TotalTime();
+        float offsetX = sinf(time * 0.5f) * 2.0f;  // Slower oscillation, smaller amplitude
+        
+        XMMATRIX world = XMMatrixTranslation(-5.0f + offsetX, 1.5f, -10.0f);
+        XMStoreFloat4x4(&cylinder->World, world);
+        
+        cylinder->NumFramesDirty = gNumFrameResources;
+    }
 }
 
 void TAAApp::UpdateObjectCBs(const GameTimer& gt)
@@ -861,20 +935,21 @@ void TAAApp::UpdateObjectCBs(const GameTimer& gt)
     auto currObjectCB = mCurrFrameResource->ObjectCB.get();
     for(auto& e : mAllRitems)
     {
+        // Always update all objects to ensure PrevWorld is correct for motion vectors
+        XMMATRIX world = XMLoadFloat4x4(&e->World);
+        XMMATRIX prevWorld = XMLoadFloat4x4(&e->PrevWorld);
+        XMMATRIX texTransform = XMLoadFloat4x4(&e->TexTransform);
+
+        ObjectConstants objConstants;
+        XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
+        XMStoreFloat4x4(&objConstants.PrevWorld, XMMatrixTranspose(prevWorld));
+        XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
+        objConstants.MaterialIndex = e->Mat->MatCBIndex;
+
+        currObjectCB->CopyData(e->ObjCBIndex, objConstants);
+
         if(e->NumFramesDirty > 0)
-        {
-            XMMATRIX world = XMLoadFloat4x4(&e->World);
-            XMMATRIX texTransform = XMLoadFloat4x4(&e->TexTransform);
-
-            ObjectConstants objConstants;
-            XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
-            XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
-            objConstants.MaterialIndex = e->Mat->MatCBIndex;
-
-            currObjectCB->CopyData(e->ObjCBIndex, objConstants);
-
             e->NumFramesDirty--;
-        }
     }
 }
 
@@ -927,15 +1002,27 @@ void TAAApp::UpdateMainPassCB(const GameTimer& gt)
         mMainPassCB.PrevViewProj = mMainPassCB.UnjitteredViewProj;
     }
 
-    // Only apply jitter when TAA is enabled (for rendering)
-    if (mTAAEnabled)
+    // Apply jitter when TAA or FSR3 is enabled (both need temporal jitter)
+    if (mTAAEnabled || mFSR3Enabled)
     {
-        // Apply jitter to projection matrix (in NDC space)
-        XMFLOAT2 jitter = TemporalAA::GetJitter(mFrameIndex);
+        float jitterX, jitterY;
         
-        // Convert pixel jitter to NDC space
-        float jitterX = (2.0f * jitter.x) / (float)mClientWidth;
-        float jitterY = (2.0f * jitter.y) / (float)mClientHeight;
+        if (mFSR3Enabled && mFSR3 && mFSR3->IsInitialized())
+        {
+            // Get jitter from FSR3
+            mFSR3->GetJitterOffset(mFrameIndex, jitterX, jitterY);
+            // FSR3 returns jitter in pixels, convert to NDC
+            // Y is negated per AMD documentation (DirectX coordinate system)
+            jitterX = (2.0f * jitterX) / (float)mClientWidth;
+            jitterY = (-2.0f * jitterY) / (float)mClientHeight;
+        }
+        else
+        {
+            // Use TAA jitter
+            XMFLOAT2 jitter = TemporalAA::GetJitter(mFrameIndex);
+            jitterX = (2.0f * jitter.x) / (float)mClientWidth;
+            jitterY = (2.0f * jitter.y) / (float)mClientHeight;
+        }
         
         // Modify projection matrix directly (offset in third row)
         XMFLOAT4X4 projMat;
@@ -1107,34 +1194,6 @@ void TAAApp::BuildRootSignature()
         taaSerializedRootSig->GetBufferPointer(),
         taaSerializedRootSig->GetBufferSize(),
         IID_PPV_ARGS(mTAARootSignature.GetAddressOf())));
-
-    // FSR root signature
-    CD3DX12_DESCRIPTOR_RANGE fsrTexTable;
-    fsrTexTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0); // input texture
-
-    CD3DX12_ROOT_PARAMETER fsrRootParameter[2];
-    fsrRootParameter[0].InitAsConstants(sizeof(FSRConstants) / 4, 0); // FSR constants
-    fsrRootParameter[1].InitAsDescriptorTable(1, &fsrTexTable, D3D12_SHADER_VISIBILITY_PIXEL);
-
-    CD3DX12_ROOT_SIGNATURE_DESC fsrRootSigDesc(2, fsrRootParameter,
-        (UINT)staticSamplers.size(), staticSamplers.data(),
-        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-
-    ComPtr<ID3DBlob> fsrSerializedRootSig = nullptr;
-    hr = D3D12SerializeRootSignature(&fsrRootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
-        fsrSerializedRootSig.GetAddressOf(), errorBlob.GetAddressOf());
-
-    if(errorBlob != nullptr)
-    {
-        ::OutputDebugStringA((char*)errorBlob->GetBufferPointer());
-    }
-    ThrowIfFailed(hr);
-
-    ThrowIfFailed(md3dDevice->CreateRootSignature(
-        0,
-        fsrSerializedRootSig->GetBufferPointer(),
-        fsrSerializedRootSig->GetBufferSize(),
-        IID_PPV_ARGS(mFSRRootSignature.GetAddressOf())));
 }
 
 void TAAApp::BuildDescriptorHeaps()
@@ -1176,9 +1235,6 @@ void TAAApp::BuildShadersAndInputLayout()
     
     mShaders["taaResolveVS"] = d3dUtil::CompileShader(L"Shaders\\TAAResolve.hlsl", nullptr, "VS", "vs_5_1");
     mShaders["taaResolvePS"] = d3dUtil::CompileShader(L"Shaders\\TAAResolve.hlsl", nullptr, "PS", "ps_5_1");
-    
-    mShaders["fsrVS"] = d3dUtil::CompileShader(L"Shaders\\FSR.hlsl", nullptr, "VS", "vs_5_1");
-    mShaders["fsrPS"] = d3dUtil::CompileShader(L"Shaders\\FSR.hlsl", nullptr, "PS_FSR", "ps_5_1");
 
     mInputLayout =
     {
@@ -1364,24 +1420,6 @@ void TAAApp::BuildPSOs()
     taaResolvePsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
     taaResolvePsoDesc.DepthStencilState.DepthEnable = FALSE;
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&taaResolvePsoDesc, IID_PPV_ARGS(&mPSOs["taaResolve"])));
-
-    // FSR PSO (full-screen sharpening pass)
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC fsrPsoDesc = opaquePsoDesc;
-    fsrPsoDesc.pRootSignature = mFSRRootSignature.Get();
-    fsrPsoDesc.InputLayout = { nullptr, 0 };
-    fsrPsoDesc.VS =
-    {
-        reinterpret_cast<BYTE*>(mShaders["fsrVS"]->GetBufferPointer()),
-        mShaders["fsrVS"]->GetBufferSize()
-    };
-    fsrPsoDesc.PS =
-    {
-        reinterpret_cast<BYTE*>(mShaders["fsrPS"]->GetBufferPointer()),
-        mShaders["fsrPS"]->GetBufferSize()
-    };
-    fsrPsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
-    fsrPsoDesc.DepthStencilState.DepthEnable = FALSE;
-    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&fsrPsoDesc, IID_PPV_ARGS(&mPSOs["fsr"])));
 }
 
 void TAAApp::BuildFrameResources()
@@ -1441,6 +1479,7 @@ void TAAApp::BuildRenderItems()
 {
     auto gridRitem = std::make_unique<RenderItem>();
     gridRitem->World = MathHelper::Identity4x4();
+    gridRitem->PrevWorld = MathHelper::Identity4x4();  // Initialize PrevWorld
     gridRitem->ObjCBIndex = 0;
     gridRitem->Mat = mMaterials["white"].get();
     gridRitem->Geo = mGeometries["shapeGeo"].get();
@@ -1466,6 +1505,7 @@ void TAAApp::BuildRenderItems()
         XMMATRIX rightSphereWorld = XMMatrixTranslation(+5.0f, 3.5f, -10.0f + i*5.0f);
 
         XMStoreFloat4x4(&leftCylRitem->World, leftCylWorld);
+        XMStoreFloat4x4(&leftCylRitem->PrevWorld, leftCylWorld);  // Initialize PrevWorld
         leftCylRitem->ObjCBIndex = objCBIndex++;
         leftCylRitem->Mat = mMaterials["red"].get();
         leftCylRitem->Geo = mGeometries["shapeGeo"].get();
@@ -1475,6 +1515,7 @@ void TAAApp::BuildRenderItems()
         leftCylRitem->BaseVertexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].BaseVertexLocation;
 
         XMStoreFloat4x4(&rightCylRitem->World, rightCylWorld);
+        XMStoreFloat4x4(&rightCylRitem->PrevWorld, rightCylWorld);  // Initialize PrevWorld
         rightCylRitem->ObjCBIndex = objCBIndex++;
         rightCylRitem->Mat = mMaterials["green"].get();
         rightCylRitem->Geo = mGeometries["shapeGeo"].get();
@@ -1484,6 +1525,7 @@ void TAAApp::BuildRenderItems()
         rightCylRitem->BaseVertexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].BaseVertexLocation;
 
         XMStoreFloat4x4(&leftSphereRitem->World, leftSphereWorld);
+        XMStoreFloat4x4(&leftSphereRitem->PrevWorld, leftSphereWorld);  // Initialize PrevWorld
         leftSphereRitem->ObjCBIndex = objCBIndex++;
         leftSphereRitem->Mat = mMaterials["blue"].get();
         leftSphereRitem->Geo = mGeometries["shapeGeo"].get();
@@ -1493,6 +1535,7 @@ void TAAApp::BuildRenderItems()
         leftSphereRitem->BaseVertexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].BaseVertexLocation;
 
         XMStoreFloat4x4(&rightSphereRitem->World, rightSphereWorld);
+        XMStoreFloat4x4(&rightSphereRitem->PrevWorld, rightSphereWorld);  // Initialize PrevWorld
         rightSphereRitem->ObjCBIndex = objCBIndex++;
         rightSphereRitem->Mat = mMaterials["red"].get();
         rightSphereRitem->Geo = mGeometries["shapeGeo"].get();
