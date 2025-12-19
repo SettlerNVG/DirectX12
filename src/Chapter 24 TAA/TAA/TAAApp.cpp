@@ -159,6 +159,7 @@ private:
     bool mTAAEnabled = true;
     bool mFSR3Enabled = false;
     bool mFSR3NeedsReset = true;
+    bool mMotionDebugEnabled = false;  // Debug: show motion vectors in red
     
     UINT mFSR3OutputUavIndex = 0;
     
@@ -183,6 +184,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
     printf("  Mouse - Look around\n");
     printf("  T - Toggle TAA (Temporal Anti-Aliasing)\n");
     printf("  F - Toggle FSR 3 (AMD FidelityFX Super Resolution)\n");
+    printf("  M - Toggle Motion Debug (red = moving pixels)\n");
     printf("\n");
     printf("Note: TAA and FSR3 are mutually exclusive.\n");
     printf("\n");
@@ -905,6 +907,22 @@ void TAAApp::OnKeyboardInput(const GameTimer& gt)
         fKeyPressed = false;
     }
 
+    // Toggle Motion Debug with M key
+    static bool mKeyPressed = false;
+    if(GetAsyncKeyState('M') & 0x8000)
+    {
+        if(!mKeyPressed)
+        {
+            mMotionDebugEnabled = !mMotionDebugEnabled;
+            printf("Motion Debug (red = moving pixels): %s\n", mMotionDebugEnabled ? "ON" : "OFF");
+            mKeyPressed = true;
+        }
+    }
+    else
+    {
+        mKeyPressed = false;
+    }
+
     mCamera.UpdateViewMatrix();
 }
 
@@ -1075,6 +1093,7 @@ void TAAApp::UpdateTAACB(const GameTimer& gt)
     mTAACB.ScreenSize = XMFLOAT2((float)mClientWidth, (float)mClientHeight);
     mTAACB.BlendFactor = 0.04f;  // Lower for more stable history (4% current, 96% history)
     mTAACB.MotionScale = 1.0f;
+    mTAACB.MotionDebugEnabled = mMotionDebugEnabled ? 1.0f : 0.0f;
 
     auto currTAACB = mCurrFrameResource->TAACB.get();
     currTAACB->CopyData(0, mTAACB);

@@ -13,7 +13,8 @@ cbuffer cbTAA : register(b0)
     float2 gScreenSize;
     float gBlendFactor;
     float gMotionScale;
-    float2 gPadding;
+    float gMotionDebugEnabled;  // 1.0 = show red on moving pixels
+    float gPadding;
 };
 
 Texture2D gCurrentFrame  : register(t0);
@@ -141,6 +142,19 @@ float4 PS(VertexOut pin) : SV_Target
     
     // Final blend
     float3 finalColor = lerp(historyRGB, currentRGB, blend);
+    
+    // Motion debug visualization - show red where there is motion
+    if (gMotionDebugEnabled > 0.5f)
+    {
+        float2 rawVelocity = gMotionVectors.Sample(gsamPointClamp, uv).rg;
+        float velocityMag = length(rawVelocity);
+        
+        if (velocityMag > 0.00001f)
+        {
+            float intensity = min(velocityMag * 500.0f, 1.0f);
+            finalColor = lerp(finalColor, float3(1.0f, 0.0f, 0.0f), max(intensity, 0.5f));
+        }
+    }
     
     return float4(finalColor, 1.0f);
 }
