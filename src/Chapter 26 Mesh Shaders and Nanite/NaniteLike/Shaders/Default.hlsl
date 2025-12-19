@@ -1,6 +1,7 @@
 //***************************************************************************************
 // Default.hlsl - Fallback vertex/pixel shader for rendering meshlet meshes
 // With meshlet visualization (each meshlet gets a unique color)
+// Supports optional diffuse texture
 //***************************************************************************************
 
 cbuffer PassConstants : register(b0)
@@ -13,7 +14,18 @@ cbuffer PassConstants : register(b0)
     float gPadding1;
     float2 gRenderTargetSize;
     float2 gInvRenderTargetSize;
+    float4 gFrustumPlanes[6];
+    float gLODScale;
+    uint gMeshletCount;
+    uint gInstanceCount;
+    uint gShowMeshletColors;
+    uint gUseTexture;
+    uint3 gPadding2;
 };
+
+// Diffuse texture
+Texture2D gDiffuseMap : register(t0);
+SamplerState gSamLinear : register(s0);
 
 struct VertexIn
 {
@@ -77,34 +89,43 @@ VertexOut VSMain(VertexIn vin)
 
 float4 PSMain(VertexOut pin) : SV_Target
 {
-    // Get meshlet color
-    float3 meshletColor = MeshletIDToColor(pin.MeshletID);
+    float3 baseColor;
+    float alpha = 1.0f;
     
-    // Simple directional light
+    if (gUseTexture)
+    {
+        float4 texColor = gDiffuseMap.Sample(gSamLinear, pin.TexC);
+        baseColor = texColor.rgb;
+        alpha = texColor.a;
+    }
+    else if (gShowMeshletColors)
+    {
+        baseColor = MeshletIDToColor(pin.MeshletID);
+    }
+    else
+    {
+        baseColor = float3(0.7f, 0.7f, 0.7f);
+    }
+    
     float3 lightDir = normalize(float3(0.57735f, 0.57735f, -0.57735f));
     float3 lightColor = float3(1.0f, 0.98f, 0.95f);
-    float3 ambient = float3(0.25f, 0.25f, 0.25f);
+    float3 ambient = float3(0.3f, 0.3f, 0.3f);
     
     float3 N = normalize(pin.NormalW);
     float3 V = normalize(gEyePosW - pin.PosW);
     
-    // Flip normal if backfacing
     if (dot(N, V) < 0)
         N = -N;
     
     float NdotL = max(dot(N, lightDir), 0.0f);
     float3 diffuse = NdotL * lightColor;
     
-    // Specular (Blinn-Phong)
     float3 H = normalize(lightDir + V);
     float NdotH = max(dot(N, H), 0.0f);
-    float3 specular = pow(NdotH, 32.0f) * lightColor * 0.15f;
+    float3 specular = pow(NdotH, 32.0f) * lightColor * 0.1f;
     
-    // Apply lighting to meshlet color
-    float3 finalColor = meshletColor * (ambient + diffuse) + specular;
-    
-    // Gamma correction
+    float3 finalColor = baseColor * (ambient + diffuse) + specular;
     finalColor = pow(saturate(finalColor), 1.0f / 2.2f);
     
-    return float4(finalColor, 1.0f);
+    return float4(finalColor, alpha);
 }

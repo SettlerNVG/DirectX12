@@ -63,6 +63,8 @@ cbuffer PassConstants : register(b0)
     uint gMeshletCount;
     uint gInstanceCount;
     uint gShowMeshletColors;  // 1 = show meshlet colors, 0 = solid gray
+    uint gUseTexture;         // 1 = use diffuse texture, 0 = use colors
+    uint3 gPadding2;
 };
 
 
@@ -73,6 +75,9 @@ StructuredBuffer<MeshletBounds> MeshletBoundsBuffer : register(t2);
 StructuredBuffer<uint> UniqueVertexIndices : register(t3);
 StructuredBuffer<uint> PrimitiveIndices : register(t4);
 StructuredBuffer<Instance> Instances : register(t5);
+
+// Diffuse texture
+Texture2D gDiffuseMap : register(t6);
 
 // Sampler
 SamplerState gSamLinear : register(s0);
@@ -289,40 +294,46 @@ float3 MeshletIDToColor(uint id)
 
 float4 PSMain(VertexOut pin) : SV_Target
 {
-    // Get base color - either meshlet color or solid gray
+    // Get base color
     float3 baseColor;
-    if (gShowMeshletColors)
+    float alpha = 1.0f;
+    
+    if (gUseTexture)
+    {
+        // Simple texture sampling using model's UV coordinates
+        float4 texColor = gDiffuseMap.Sample(gSamLinear, pin.TexC);
+        baseColor = texColor.rgb;
+        alpha = texColor.a;
+    }
+    else if (gShowMeshletColors)
+    {
         baseColor = MeshletIDToColor(pin.MeshletIndex);
+    }
     else
-        baseColor = float3(0.7f, 0.7f, 0.7f);  // Solid gray
+    {
+        baseColor = float3(0.7f, 0.7f, 0.7f);
+    }
     
     // Simple directional light
     float3 lightDir = normalize(float3(0.57735f, 0.57735f, -0.57735f));
     float3 lightColor = float3(1.0f, 0.98f, 0.95f);
-    float3 ambient = float3(0.25f, 0.25f, 0.25f);
+    float3 ambient = float3(0.3f, 0.3f, 0.3f);
     
-    // Normal
     float3 N = normalize(pin.NormalW);
     float3 V = normalize(gEyePosW - pin.PosW);
     
-    // Flip normal if backfacing
     if (dot(N, V) < 0)
         N = -N;
     
-    // Diffuse
     float NdotL = max(dot(N, lightDir), 0.0f);
     float3 diffuse = NdotL * lightColor;
     
-    // Specular (Blinn-Phong)
     float3 H = normalize(lightDir + V);
     float NdotH = max(dot(N, H), 0.0f);
-    float3 specular = pow(NdotH, 32.0f) * lightColor * 0.15f;
+    float3 specular = pow(NdotH, 32.0f) * lightColor * 0.1f;
     
-    // Apply lighting to base color
     float3 finalColor = baseColor * (ambient + diffuse) + specular;
-    
-    // Gamma correction
     finalColor = pow(saturate(finalColor), 1.0f / 2.2f);
     
-    return float4(finalColor, 1.0f);
+    return float4(finalColor, alpha);
 }

@@ -7,6 +7,7 @@
 #include "../../Common/d3dUtil.h"
 #include "../../Common/Camera.h"
 #include "Meshlet.h"
+#include <string>
 
 class NaniteRenderer
 {
@@ -21,6 +22,10 @@ public:
 
     void UploadMesh(ID3D12GraphicsCommandList* cmdList, const MeshletMesh& mesh, UINT meshIndex);
     void SetInstances(ID3D12GraphicsCommandList* cmdList, const std::vector<MeshInstance>& instances);
+    
+    // Texture loading
+    bool LoadTexture(ID3D12GraphicsCommandList* cmdList, const std::wstring& filename);
+    bool HasTexture() const { return mDiffuseTexture != nullptr; }
 
     void Render(
         ID3D12GraphicsCommandList* cmdList,
@@ -37,6 +42,10 @@ public:
     // Meshlet visualization toggle
     void ToggleMeshletVisualization() { mShowMeshletColors = !mShowMeshletColors; }
     bool IsShowingMeshletColors() const { return mShowMeshletColors; }
+    
+    // Texture toggle
+    void ToggleTexture() { if (mDiffuseTexture) mUseTexture = !mUseTexture; }
+    bool IsUsingTexture() const { return mUseTexture; }
 
 private:
     void BuildRootSignature();
@@ -105,6 +114,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> mUniqueVertexIndicesUploadBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> mPrimitiveIndicesUploadBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> mInstanceUploadBuffer;
+    
+    // Texture resources
+    Microsoft::WRL::ComPtr<ID3D12Resource> mDiffuseTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mDiffuseTextureUpload;
+    bool mUseTexture = false;
 
     std::vector<MeshletMesh> mMeshes;
     std::vector<MeshInstance> mInstances;
@@ -171,4 +185,6 @@ struct MeshShaderPassConstants
     UINT MeshletCount;
     UINT InstanceCount;
     UINT ShowMeshletColors;  // 1 = show colors, 0 = solid color
+    UINT UseTexture;         // 1 = use diffuse texture, 0 = use meshlet colors
+    UINT Padding2[3];
 };

@@ -257,6 +257,21 @@ void NaniteLikeApp::OnKeyboardInput(const GameTimer& gt)
     {
         mKeyWasPressed = false;
     }
+    
+    // Toggle texture with T key
+    static bool tKeyWasPressed = false;
+    if (GetAsyncKeyState('T') & 0x8000)
+    {
+        if (!tKeyWasPressed)
+        {
+            mNaniteRenderer->ToggleTexture();
+            tKeyWasPressed = true;
+        }
+    }
+    else
+    {
+        tKeyWasPressed = false;
+    }
 
     mCamera.UpdateViewMatrix();
 }
@@ -303,7 +318,7 @@ void NaniteLikeApp::BuildMeshletMeshes()
     
     // Use DirectStorage for fast file loading
     bool loaded = MeshletBuilder::LoadOBJWithDirectStorage(
-        L"OBJ/Armadillo.obj", mesh, mStorageLoader.get());
+        L"OBJ/StGilesLychGate01/StGilesLychGate02.obj", mesh, mStorageLoader.get());
     
     if (!loaded)
     {
@@ -336,6 +351,17 @@ void NaniteLikeApp::BuildMeshletMeshes()
     printf("  - Meshlets: %u\n", mNaniteRenderer->GetMeshletCount());
     printf("  - GPU vertices: %u\n", mNaniteRenderer->GetVertexCount());
     printf("  - GPU triangles: %u\n", mNaniteRenderer->GetTriangleCount());
+    
+    // Try to load texture
+    printf("\n\033[33m[TEXTURE]\033[0m Looking for texture...\n");
+    if (mNaniteRenderer->LoadTexture(mCommandList.Get(), L"OBJ/StGilesLychGate01/wssop-5brlm.dds"))
+    {
+        printf("\033[32m[SUCCESS]\033[0m Texture loaded and applied!\n");
+    }
+    else
+    {
+        printf("\033[33m[INFO]\033[0m No texture found.\n");
+    }
 
     SetWindowText(mhMainWnd, L"Nanite-Like Mesh Shader Demo (DirectXMesh + DirectStorage)");
     
@@ -459,14 +485,21 @@ void NaniteLikeApp::PrintStats(const GameTimer& gt)
     }
     
     printf("\n\033[36m[VISUALIZATION]\033[0m\n");
-    if (mNaniteRenderer->IsShowingMeshletColors())
-        printf("  Meshlet Colors: \033[32mON\033[0m\n");
+    if (mNaniteRenderer->IsUsingTexture())
+        printf("  Mode: \033[32mTEXTURE\033[0m\n");
+    else if (mNaniteRenderer->IsShowingMeshletColors())
+        printf("  Mode: \033[36mMESHLET COLORS\033[0m\n");
     else
-        printf("  Meshlet Colors: \033[33mOFF\033[0m (solid gray)\n");
+        printf("  Mode: \033[33mSOLID GRAY\033[0m\n");
+    
+    if (mNaniteRenderer->HasTexture())
+        printf("  Texture: \033[32mLOADED\033[0m\n");
+    else
+        printf("  Texture: \033[33mNOT LOADED\033[0m\n");
     
     printf("\n\033[35m[CONTROLS]\033[0m\n");
     printf("  WASD - Move  |  QE - Up/Down  |  Mouse - Look\n");
-    printf("  Shift - Fast  |  M - Toggle meshlet colors\n");
+    printf("  Shift - Fast  |  M - Meshlet colors  |  T - Toggle texture\n");
     
     printf("\033[33m");
     printf("------------------------------------------------------\n");

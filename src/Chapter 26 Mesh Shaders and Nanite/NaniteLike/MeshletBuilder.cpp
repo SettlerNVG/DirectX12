@@ -225,11 +225,48 @@ bool MeshletBuilder::LoadOBJ(const std::wstring& filename, MeshletMesh& outMesh)
 
     file.close();
 
+    // If no texture coordinates were loaded, generate them using spherical mapping
+    if (tempTexCoords.empty() && !positions.empty())
+    {
+        OutputDebugStringA("No UV coordinates in OBJ, generating spherical mapping...\n");
+        
+        // Find bounding sphere center
+        XMVECTOR minPt = XMVectorSet(FLT_MAX, FLT_MAX, FLT_MAX, 0);
+        XMVECTOR maxPt = XMVectorSet(-FLT_MAX, -FLT_MAX, -FLT_MAX, 0);
+        for (const auto& p : positions)
+        {
+            XMVECTOR pos = XMLoadFloat3(&p);
+            minPt = XMVectorMin(minPt, pos);
+            maxPt = XMVectorMax(maxPt, pos);
+        }
+        XMVECTOR center = (minPt + maxPt) * 0.5f;
+        
+        // Generate spherical UV coordinates
+        texCoords.clear();
+        texCoords.reserve(positions.size());
+        for (const auto& p : positions)
+        {
+            XMVECTOR pos = XMLoadFloat3(&p);
+            XMVECTOR dir = XMVector3Normalize(pos - center);
+            
+            XMFLOAT3 d;
+            XMStoreFloat3(&d, dir);
+            
+            // Spherical mapping
+            float u = 0.5f + atan2f(d.z, d.x) / (2.0f * XM_PI);
+            float v = 0.5f - asinf(d.y) / XM_PI;
+            
+            texCoords.push_back(XMFLOAT2(u, v));
+        }
+    }
+
     std::vector<XMFLOAT3> tangents(positions.size(), XMFLOAT3(1, 0, 0));
     outMesh.Name = "OBJMesh";
     
     char buf[256];
-    sprintf_s(buf, "Loaded OBJ: %zu vertices, %zu triangles\n", positions.size(), indices.size() / 3);
+    sprintf_s(buf, "Loaded OBJ: %zu vertices, %zu triangles, UVs: %s\n", 
+        positions.size(), indices.size() / 3,
+        tempTexCoords.empty() ? "generated" : "from file");
     OutputDebugStringA(buf);
 
     return BuildMeshlets(positions, normals, texCoords, tangents, indices, outMesh);
@@ -343,11 +380,48 @@ bool MeshletBuilder::LoadOBJWithDirectStorage(
         }
     }
 
+    // If no texture coordinates were loaded, generate them using spherical mapping
+    if (tempTexCoords.empty() && !positions.empty())
+    {
+        OutputDebugStringA("No UV coordinates in OBJ, generating spherical mapping...\n");
+        
+        // Find bounding sphere center
+        XMVECTOR minPt = XMVectorSet(FLT_MAX, FLT_MAX, FLT_MAX, 0);
+        XMVECTOR maxPt = XMVectorSet(-FLT_MAX, -FLT_MAX, -FLT_MAX, 0);
+        for (const auto& p : positions)
+        {
+            XMVECTOR pos = XMLoadFloat3(&p);
+            minPt = XMVectorMin(minPt, pos);
+            maxPt = XMVectorMax(maxPt, pos);
+        }
+        XMVECTOR center = (minPt + maxPt) * 0.5f;
+        
+        // Generate spherical UV coordinates
+        texCoords.clear();
+        texCoords.reserve(positions.size());
+        for (const auto& p : positions)
+        {
+            XMVECTOR pos = XMLoadFloat3(&p);
+            XMVECTOR dir = XMVector3Normalize(pos - center);
+            
+            XMFLOAT3 d;
+            XMStoreFloat3(&d, dir);
+            
+            // Spherical mapping
+            float u = 0.5f + atan2f(d.z, d.x) / (2.0f * XM_PI);
+            float v = 0.5f - asinf(d.y) / XM_PI;
+            
+            texCoords.push_back(XMFLOAT2(u, v));
+        }
+    }
+
     std::vector<XMFLOAT3> tangents(positions.size(), XMFLOAT3(1, 0, 0));
     outMesh.Name = "OBJMesh_DirectStorage";
     
     char buf[256];
-    sprintf_s(buf, "DirectStorage: Loaded OBJ: %zu vertices, %zu triangles\n", positions.size(), indices.size() / 3);
+    sprintf_s(buf, "DirectStorage: Loaded OBJ: %zu vertices, %zu triangles, UVs: %s\n", 
+        positions.size(), indices.size() / 3, 
+        tempTexCoords.empty() ? "generated" : "from file");
     OutputDebugStringA(buf);
 
     return BuildMeshlets(positions, normals, texCoords, tangents, indices, outMesh);

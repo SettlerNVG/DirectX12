@@ -4,6 +4,7 @@
 
 #include "NaniteRenderer.h"
 #include "../../Common/d3dUtil.h"
+#include "../../Common/DDSTextureLoader.h"
 #include <dxcapi.h>
 
 using namespace DirectX;
@@ -85,10 +86,24 @@ void NaniteRenderer::BuildDescriptorHeaps()
 
 void NaniteRenderer::BuildRootSignature()
 {
-    CD3DX12_ROOT_PARAMETER rootParams[1];
-    rootParams[0].InitAsConstantBufferView(0);
+    // Root parameters:
+    // 0: CBV - Pass constants
+    // 1: Descriptor table - Diffuse texture
+    CD3DX12_DESCRIPTOR_RANGE texTable;
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
     
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(1, rootParams, 0, nullptr,
+    CD3DX12_ROOT_PARAMETER rootParams[2];
+    rootParams[0].InitAsConstantBufferView(0);
+    rootParams[1].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
+    
+    // Static sampler
+    CD3DX12_STATIC_SAMPLER_DESC linearWrap(
+        0, D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP);
+    
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(2, rootParams, 1, &linearWrap,
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
     
     ComPtr<ID3DBlob> serializedRootSig;
@@ -114,8 +129,12 @@ void NaniteRenderer::BuildMeshShaderRootSignature()
     // 4: SRV - UniqueVertexIndices (t3)
     // 5: SRV - PrimitiveIndices (t4)
     // 6: SRV - Instances (t5)
+    // 7: Descriptor Table - Diffuse Texture (t6)
     
-    CD3DX12_ROOT_PARAMETER1 rootParams[7];
+    CD3DX12_DESCRIPTOR_RANGE1 texTable;
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 6, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+    
+    CD3DX12_ROOT_PARAMETER1 rootParams[8];
     rootParams[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC, D3D12_SHADER_VISIBILITY_ALL);
     rootParams[1].InitAsShaderResourceView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC, D3D12_SHADER_VISIBILITY_ALL);
     rootParams[2].InitAsShaderResourceView(1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC, D3D12_SHADER_VISIBILITY_ALL);
@@ -123,9 +142,18 @@ void NaniteRenderer::BuildMeshShaderRootSignature()
     rootParams[4].InitAsShaderResourceView(3, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC, D3D12_SHADER_VISIBILITY_ALL);
     rootParams[5].InitAsShaderResourceView(4, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC, D3D12_SHADER_VISIBILITY_ALL);
     rootParams[6].InitAsShaderResourceView(5, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC, D3D12_SHADER_VISIBILITY_ALL);
+    rootParams[7].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
+    
+    // Static sampler for texture
+    CD3DX12_STATIC_SAMPLER_DESC linearWrap(
+        0, // shaderRegister
+        D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP);
     
     CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSigDesc;
-    rootSigDesc.Init_1_1(_countof(rootParams), rootParams, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+    rootSigDesc.Init_1_1(_countof(rootParams), rootParams, 1, &linearWrap, D3D12_ROOT_SIGNATURE_FLAG_NONE);
     
     ComPtr<ID3DBlob> serializedRootSig;
     ComPtr<ID3DBlob> errorBlob;
@@ -428,6 +456,36 @@ void NaniteRenderer::CreateBuffers()
         IID_PPV_ARGS(&mQueryResultBuffer)));
 }
 
+bool NaniteRenderer::LoadTexture(ID3D12GraphicsCommandList* cmdList, const std::wstring& filename)
+{
+    HRESULT hr = DirectX::CreateDDSTextureFromFile12(
+        mDevice, cmdList, filename.c_str(), 
+        mDiffuseTexture, mDiffuseTextureUpload);
+    
+    if (FAILED(hr))
+    {
+        printf("\033[31m[ERROR]\033[0m Failed to load texture: %ls (0x%08X)\n", filename.c_str(), hr);
+        mUseTexture = false;
+        return false;
+    }
+    
+    // Create SRV in descriptor heap (slot 0)
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = mDiffuseTexture->GetDesc().Format;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    srvDesc.Texture2D.MipLevels = mDiffuseTexture->GetDesc().MipLevels;
+    srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+    
+    mDevice->CreateShaderResourceView(mDiffuseTexture.Get(), &srvDesc,
+        mSrvHeap->GetCPUDescriptorHandleForHeapStart());
+    
+    mUseTexture = true;
+    printf("\033[32m[TEXTURE]\033[0m Loaded: %ls\n", filename.c_str());
+    return true;
+}
+
 void NaniteRenderer::ExtractFrustumPlanes(const XMMATRIX& viewProj, XMFLOAT4* planes)
 {
     // Extract frustum planes from ViewProj matrix
@@ -647,6 +705,7 @@ void NaniteRenderer::RenderMeshShader(ID3D12GraphicsCommandList* cmdList, const 
     pc.InstanceCount = (UINT)mInstances.size();
     pc.LODScale = 1.0f;
     pc.ShowMeshletColors = mShowMeshletColors ? 1 : 0;
+    pc.UseTexture = mUseTexture ? 1 : 0;
     ExtractFrustumPlanes(viewProj, pc.FrustumPlanes);
     
     void* mapped;
@@ -676,6 +735,11 @@ void NaniteRenderer::RenderMeshShader(ID3D12GraphicsCommandList* cmdList, const 
     
     cmdList6->SetPipelineState(mMeshShaderPSO.Get());
     cmdList6->SetGraphicsRootSignature(mMeshShaderRootSig.Get());
+    
+    // Set descriptor heap for texture
+    ID3D12DescriptorHeap* heaps[] = { mSrvHeap.Get() };
+    cmdList6->SetDescriptorHeaps(1, heaps);
+    
     cmdList6->SetGraphicsRootConstantBufferView(0, mPassConstantsBuffer->GetGPUVirtualAddress());
     cmdList6->SetGraphicsRootShaderResourceView(1, mMSVertexBuffer->GetGPUVirtualAddress());
     cmdList6->SetGraphicsRootShaderResourceView(2, mMeshletBuffer->GetGPUVirtualAddress());
@@ -683,6 +747,11 @@ void NaniteRenderer::RenderMeshShader(ID3D12GraphicsCommandList* cmdList, const 
     cmdList6->SetGraphicsRootShaderResourceView(4, mUniqueVertexIndicesBuffer->GetGPUVirtualAddress());
     cmdList6->SetGraphicsRootShaderResourceView(5, mPrimitiveIndicesBuffer->GetGPUVirtualAddress());
     cmdList6->SetGraphicsRootShaderResourceView(6, mInstanceBuffer->GetGPUVirtualAddress());
+    
+    // Set texture descriptor table
+    if (mUseTexture)
+        cmdList6->SetGraphicsRootDescriptorTable(7, mSrvHeap->GetGPUDescriptorHandleForHeapStart());
+    
     cmdList6->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     
     // Begin pipeline statistics query
@@ -732,6 +801,8 @@ void NaniteRenderer::RenderFallback(ID3D12GraphicsCommandList* cmdList, const Ca
     pc.EyePosW = camera.GetPosition3f();
     pc.RenderTargetSize = XMFLOAT2((float)mWidth, (float)mHeight);
     pc.InvRenderTargetSize = XMFLOAT2(1.0f / mWidth, 1.0f / mHeight);
+    pc.ShowMeshletColors = mShowMeshletColors ? 1 : 0;
+    pc.UseTexture = mUseTexture ? 1 : 0;
     
     void* mapped;
     mPassConstantsBuffer->Map(0, nullptr, &mapped);
@@ -740,7 +811,17 @@ void NaniteRenderer::RenderFallback(ID3D12GraphicsCommandList* cmdList, const Ca
     
     cmdList->SetPipelineState(mPSO.Get());
     cmdList->SetGraphicsRootSignature(mRootSignature.Get());
+    
+    // Set descriptor heap for texture
+    ID3D12DescriptorHeap* heaps[] = { mSrvHeap.Get() };
+    cmdList->SetDescriptorHeaps(1, heaps);
+    
     cmdList->SetGraphicsRootConstantBufferView(0, mPassConstantsBuffer->GetGPUVirtualAddress());
+    
+    // Set texture if available
+    if (mUseTexture)
+        cmdList->SetGraphicsRootDescriptorTable(1, mSrvHeap->GetGPUDescriptorHandleForHeapStart());
+    
     cmdList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     cmdList->IASetVertexBuffers(0, 1, &mVertexBufferView);
     cmdList->IASetIndexBuffer(&mIndexBufferView);
