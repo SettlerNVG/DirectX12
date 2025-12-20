@@ -109,6 +109,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "23 - Character Animation", 
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "24 - Temporal Anti-Aliasing", "24 - Temporal Anti-Aliasing", "{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "27 - Atmospheric Scattering", "27 - Atmospheric Scattering", "{27ATMO00-0000-0000-0000-000000000000}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AtmosphereDemo", "Chapter 27 Atmospheric Scattering\AtmosphereDemo\AtmosphereDemo.vcxproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Common", "Common", "{DA679B6E-BF5D-401B-8EBF-CB4C33B6B8DB}"
 	ProjectSection(SolutionItems) = preProject
 		Common\Camera.cpp = Common\Camera.cpp
@@ -383,6 +387,12 @@ Global
 		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}.Release|x64.ActiveCfg = Release|x64
 		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}.Release|x64.Build.0 = Release|x64
 		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}.Release|x86.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|x64.ActiveCfg = Debug|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|x64.Build.0 = Debug|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|x86.ActiveCfg = Debug|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x64.Build.0 = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x86.ActiveCfg = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -419,6 +429,7 @@ Global
 		{FE0CC4EB-8818-4EF7-922B-B591D2906E0C} = {9300137B-2F09-45D5-8177-CF4D223E7D3D}
 		{6CFBC7B3-0F8A-4C64-AA5F-9051B208D67A} = {7C1FA604-1E96-436A-85DC-5436403F5414}
 		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942} = {A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890} = {27ATMO00-0000-0000-0000-000000000000}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {1806BA18-1F4D-4D72-8850-5983B538CBE4}
