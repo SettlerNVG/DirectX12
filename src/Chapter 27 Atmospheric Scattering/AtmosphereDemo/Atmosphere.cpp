@@ -135,3 +135,103 @@ void Atmosphere::SetSunsetAtmosphere()
     mParams.SunIntensity = 25.0f;
     mParams.Exposure = 1.8f;
 }
+
+void Atmosphere::UpdateDayCycle(float deltaTime)
+{
+    if (!mDayCycle.IsEnabled)
+        return;
+
+    // Update time of day (0.0 to 1.0, wrapping)
+    mDayCycle.TimeOfDay += mDayCycle.CycleSpeed * deltaTime;
+    if (mDayCycle.TimeOfDay >= 1.0f)
+        mDayCycle.TimeOfDay -= 1.0f;
+
+    // Calculate sun position
+    // TimeOfDay: 0.0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset
+    float sunAngle = mDayCycle.TimeOfDay * DirectX::XM_2PI;
+    
+    // Sun elevation: -90° at midnight, +90° at noon
+    mDayCycle.SunElevation = sinf(sunAngle) * DirectX::XM_PIDIV2;
+    
+    // Sun azimuth rotates through the day
+    mDayCycle.SunAzimuth = cosf(sunAngle) * DirectX::XM_PI;
+
+    // Calculate sun height for color transitions
+    float sunHeight = sinf(mDayCycle.SunElevation);
+    
+    // Transition zones
+    const float horizonThreshold = 0.1f;   // Near horizon
+    const float twilightThreshold = -0.1f; // Below horizon (twilight)
+    
+    // Sun color and intensity based on elevation
+    if (sunHeight > horizonThreshold)
+    {
+        // Daytime - bright white/yellow sun
+        float dayFactor = (sunHeight - horizonThreshold) / (1.0f - horizonThreshold);
+        dayFactor = min(1.0f, dayFactor);
+        
+        // Lerp from sunrise orange to midday white
+        mDayCycle.SunColor.x = 1.0f;
+        mDayCycle.SunColor.y = 0.85f + 0.15f * dayFactor;
+        mDayCycle.SunColor.z = 0.7f + 0.3f * dayFactor;
+        
+        mDayCycle.CurrentIntensity = 15.0f + 10.0f * dayFactor;
+        
+        // Ambient light
+        mDayCycle.AmbientColor.x = 0.15f + 0.15f * dayFactor;
+        mDayCycle.AmbientColor.y = 0.18f + 0.17f * dayFactor;
+        mDayCycle.AmbientColor.z = 0.25f + 0.15f * dayFactor;
+    }
+    else if (sunHeight > twilightThreshold)
+    {
+        // Sunrise/Sunset - golden hour
+        float transitionFactor = (sunHeight - twilightThreshold) / (horizonThreshold - twilightThreshold);
+        transitionFactor = max(0.0f, min(1.0f, transitionFactor));
+        
+        // Deep orange/red colors at horizon
+        mDayCycle.SunColor.x = 1.0f;
+        mDayCycle.SunColor.y = 0.3f + 0.55f * transitionFactor;
+        mDayCycle.SunColor.z = 0.1f + 0.6f * transitionFactor;
+        
+        mDayCycle.CurrentIntensity = 5.0f + 10.0f * transitionFactor;
+        
+        // Warm ambient during golden hour
+        mDayCycle.AmbientColor.x = 0.15f + 0.1f * (1.0f - transitionFactor);
+        mDayCycle.AmbientColor.y = 0.08f + 0.1f * transitionFactor;
+        mDayCycle.AmbientColor.z = 0.1f + 0.15f * transitionFactor;
+    }
+    else
+    {
+        // Night time
+        float nightFactor = min(1.0f, (-sunHeight - 0.1f) / 0.3f);
+        
+        // Dim moonlight blue
+        mDayCycle.SunColor.x = 0.4f;
+        mDayCycle.SunColor.y = 0.5f;
+        mDayCycle.SunColor.z = 0.7f;
+        
+        mDayCycle.CurrentIntensity = max(0.5f, 5.0f * (1.0f - nightFactor));
+        
+        // Dark blue ambient at night
+        mDayCycle.AmbientColor.x = 0.02f;
+        mDayCycle.AmbientColor.y = 0.03f;
+        mDayCycle.AmbientColor.z = 0.08f;
+    }
+
+    // Update atmosphere parameters based on sun position
+    // Increase density/scattering near horizon for more dramatic sunsets
+    float horizonFactor = 1.0f - abs(sunHeight);
+    horizonFactor = horizonFactor * horizonFactor; // Quadratic falloff
+    
+    // Temporarily boost Mie scattering during sunrise/sunset
+    if (sunHeight > twilightThreshold && sunHeight < horizonThreshold * 2.0f)
+    {
+        mParams.DensityMultiplier = 1.0f + 1.5f * horizonFactor;
+        mParams.MieAnisotropy = 0.76f + 0.1f * horizonFactor;
+    }
+    else
+    {
+        mParams.DensityMultiplier = 1.0f;
+        mParams.MieAnisotropy = 0.76f;
+    }
+}

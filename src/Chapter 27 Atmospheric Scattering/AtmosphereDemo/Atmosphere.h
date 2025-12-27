@@ -72,6 +72,25 @@ public:
     void SetMarsAtmosphere();
     void SetSunsetAtmosphere();
 
+    // Day/Night cycle
+    struct DayCycleState
+    {
+        float TimeOfDay = 0.5f;          // 0.0 = midnight, 0.5 = noon, 1.0 = midnight
+        float CycleSpeed = 0.02f;         // Full day cycle speed (lower = slower)
+        bool IsEnabled = false;
+        
+        // Computed values
+        float SunElevation = 0.0f;        // Current sun elevation angle
+        float SunAzimuth = 0.0f;          // Current sun azimuth
+        DirectX::XMFLOAT3 SunColor = { 1.0f, 1.0f, 1.0f };
+        DirectX::XMFLOAT3 AmbientColor = { 0.1f, 0.1f, 0.15f };
+        float CurrentIntensity = 20.0f;
+    };
+
+    void UpdateDayCycle(float deltaTime);
+    DayCycleState& GetDayCycleState() { return mDayCycle; }
+    const DayCycleState& GetDayCycleState() const { return mDayCycle; }
+
 private:
     void BuildResource();
 
@@ -92,4 +111,5 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> mAtmosphereMap = nullptr;
 
     Parameters mParams;
+    DayCycleState mDayCycle;
 };

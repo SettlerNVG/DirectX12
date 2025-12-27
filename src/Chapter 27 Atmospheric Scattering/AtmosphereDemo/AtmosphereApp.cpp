@@ -9,11 +9,13 @@
 // - 2: Dirty/polluted atmosphere
 // - 3: Mars atmosphere
 // - 4: Sunset atmosphere
-// - Up/Down: Adjust density multiplier
-// - Left/Right: Adjust sun azimuth
-// - Page Up/Down: Adjust sun elevation
+// - Up/Down: Adjust density multiplier (manual mode only)
+// - Left/Right: Adjust sun azimuth (manual mode only)
+// - Page Up/Down: Adjust sun elevation (manual mode only)
 // - +/-: Adjust exposure
-// - Space: Toggle automatic sun animation
+// - Space: Toggle automatic day/night cycle
+// - T/Y: Manually adjust time of day (when cycle enabled)
+// - [/]: Adjust day cycle speed
 //***************************************************************************************
 
 #include "../../Common/d3dApp.h"
@@ -125,11 +127,9 @@ private:
 
     std::unique_ptr<Atmosphere> mAtmosphere;
 
-    // Atmosphere parameters
-    float mSunAngle = 0.5f;  // Radians from horizon
-    float mSunAzimuth = 0.0f;
-    bool mAnimateSun = false;  // Auto-animate sun movement
-    float mSunAnimationSpeed = 0.3f;  // Speed of sun animation
+    // Day/Night cycle control
+    float mManualSunAngle = 0.5f;   // Manual sun elevation (when day cycle disabled)
+    float mManualSunAzimuth = 0.0f; // Manual sun azimuth (when day cycle disabled)
 
     POINT mLastMousePos;
 };
@@ -238,13 +238,8 @@ void AtmosphereApp::Update(const GameTimer& gt)
 {
     OnKeyboardInput(gt);
 
-    // Animate sun if enabled
-    if (mAnimateSun)
-    {
-        mSunAzimuth += mSunAnimationSpeed * gt.DeltaTime();
-        if (mSunAzimuth > XM_2PI)
-            mSunAzimuth -= XM_2PI;
-    }
+    // Update day/night cycle
+    mAtmosphere->UpdateDayCycle(gt.DeltaTime());
 
     mCurrFrameResourceIndex = (mCurrFrameResourceIndex + 1) % gNumFrameResources;
     mCurrFrameResource = mFrameResources[mCurrFrameResourceIndex].get();
@@ -377,18 +372,36 @@ void AtmosphereApp::OnKeyboardInput(const GameTimer& gt)
     if (GetAsyncKeyState('4') & 0x8000)
         mAtmosphere->SetSunsetAtmosphere();
 
-    // Adjust density
     auto& params = mAtmosphere->GetParameters();
-    if (GetAsyncKeyState(VK_UP) & 0x8000)
-        params.DensityMultiplier = min(5.0f, params.DensityMultiplier + 0.5f * dt);
-    if (GetAsyncKeyState(VK_DOWN) & 0x8000)
-        params.DensityMultiplier = max(0.1f, params.DensityMultiplier - 0.5f * dt);
+    auto& dayCycle = mAtmosphere->GetDayCycleState();
 
-    // Adjust sun angle
-    if (GetAsyncKeyState(VK_LEFT) & 0x8000)
-        mSunAzimuth -= 0.5f * dt;
-    if (GetAsyncKeyState(VK_RIGHT) & 0x8000)
-        mSunAzimuth += 0.5f * dt;
+    // Adjust density (only when day cycle is disabled)
+    if (!dayCycle.IsEnabled)
+    {
+        if (GetAsyncKeyState(VK_UP) & 0x8000)
+            params.DensityMultiplier = min(5.0f, params.DensityMultiplier + 0.5f * dt);
+        if (GetAsyncKeyState(VK_DOWN) & 0x8000)
+            params.DensityMultiplier = max(0.1f, params.DensityMultiplier - 0.5f * dt);
+    }
+
+    // Manual sun control (only when day cycle is disabled)
+    if (!dayCycle.IsEnabled)
+    {
+        if (GetAsyncKeyState(VK_LEFT) & 0x8000)
+            mManualSunAzimuth -= 0.5f * dt;
+        if (GetAsyncKeyState(VK_RIGHT) & 0x8000)
+            mManualSunAzimuth += 0.5f * dt;
+        if (GetAsyncKeyState(VK_PRIOR) & 0x8000)
+            mManualSunAngle = min(XM_PIDIV2, mManualSunAngle + 0.3f * dt);
+        if (GetAsyncKeyState(VK_NEXT) & 0x8000)
+            mManualSunAngle = max(-0.1f, mManualSunAngle - 0.3f * dt);
+    }
+
+    // Adjust day cycle speed with [ and ]
+    if (GetAsyncKeyState(VK_OEM_4) & 0x8000) // [
+        dayCycle.CycleSpeed = max(0.001f, dayCycle.CycleSpeed - 0.01f * dt);
+    if (GetAsyncKeyState(VK_OEM_6) & 0x8000) // ]
+        dayCycle.CycleSpeed = min(0.2f, dayCycle.CycleSpeed + 0.01f * dt);
 
     // Adjust exposure
     if (GetAsyncKeyState(VK_OEM_PLUS) & 0x8000)
@@ -396,25 +409,36 @@ void AtmosphereApp::OnKeyboardInput(const GameTimer& gt)
     if (GetAsyncKeyState(VK_OEM_MINUS) & 0x8000)
         params.Exposure = max(0.1f, params.Exposure - 1.0f * dt);
 
-    // Adjust sun elevation with Page Up/Down
-    if (GetAsyncKeyState(VK_PRIOR) & 0x8000)
-        mSunAngle = min(XM_PIDIV2, mSunAngle + 0.3f * dt);
-    if (GetAsyncKeyState(VK_NEXT) & 0x8000)
-        mSunAngle = max(-0.1f, mSunAngle - 0.3f * dt);
-
-    // Toggle sun animation with Space key
+    // Toggle day/night cycle with Space key
     static bool spaceWasPressed = false;
     if (GetAsyncKeyState(VK_SPACE) & 0x8000)
     {
         if (!spaceWasPressed)
         {
-            mAnimateSun = !mAnimateSun;
+            dayCycle.IsEnabled = !dayCycle.IsEnabled;
             spaceWasPressed = true;
         }
     }
     else
     {
         spaceWasPressed = false;
+    }
+
+    // Manual time adjustment with T/Y when cycle is enabled
+    if (dayCycle.IsEnabled)
+    {
+        if (GetAsyncKeyState('T') & 0x8000)
+        {
+            dayCycle.TimeOfDay -= 0.1f * dt;
+            if (dayCycle.TimeOfDay < 0.0f)
+                dayCycle.TimeOfDay += 1.0f;
+        }
+        if (GetAsyncKeyState('Y') & 0x8000)
+        {
+            dayCycle.TimeOfDay += 0.1f * dt;
+            if (dayCycle.TimeOfDay >= 1.0f)
+                dayCycle.TimeOfDay -= 1.0f;
+        }
     }
 
     mCamera.UpdateViewMatrix();
@@ -493,13 +517,34 @@ void AtmosphereApp::UpdateMainPassCB(const GameTimer& gt)
     mMainPassCB.FarZ = 1000.0f;
     mMainPassCB.TotalTime = gt.TotalTime();
     mMainPassCB.DeltaTime = gt.DeltaTime();
-    mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
+
+    const auto& dayCycle = mAtmosphere->GetDayCycleState();
+    
+    float sunAngle, sunAzimuth;
+    XMFLOAT3 sunColor;
+    XMFLOAT3 ambientColor;
+    
+    if (dayCycle.IsEnabled)
+    {
+        sunAngle = dayCycle.SunElevation;
+        sunAzimuth = dayCycle.SunAzimuth;
+        sunColor = dayCycle.SunColor;
+        ambientColor = dayCycle.AmbientColor;
+    }
+    else
+    {
+        sunAngle = mManualSunAngle;
+        sunAzimuth = mManualSunAzimuth;
+        sunColor = { 1.0f, 0.95f, 0.8f };
+        ambientColor = { 0.25f, 0.25f, 0.35f };
+    }
 
     // Sun direction based on angle
-    float sunY = sinf(mSunAngle);
-    float sunXZ = cosf(mSunAngle);
-    mMainPassCB.Lights[0].Direction = { sunXZ * sinf(mSunAzimuth), -sunY, sunXZ * cosf(mSunAzimuth) };
-    mMainPassCB.Lights[0].Strength = { 1.0f, 0.95f, 0.8f };
+    float sunY = sinf(sunAngle);
+    float sunXZ = cosf(sunAngle);
+    mMainPassCB.Lights[0].Direction = { sunXZ * sinf(sunAzimuth), -sunY, sunXZ * cosf(sunAzimuth) };
+    mMainPassCB.Lights[0].Strength = sunColor;
+    mMainPassCB.AmbientLight = { ambientColor.x, ambientColor.y, ambientColor.z, 1.0f };
 
     auto currPassCB = mCurrFrameResource->PassCB.get();
     currPassCB->CopyData(0, mMainPassCB);
@@ -508,12 +553,29 @@ void AtmosphereApp::UpdateMainPassCB(const GameTimer& gt)
 void AtmosphereApp::UpdateAtmosphereCB(const GameTimer& gt)
 {
     auto& params = mAtmosphere->GetParameters();
+    const auto& dayCycle = mAtmosphere->GetDayCycleState();
+
+    float sunAngle, sunAzimuth;
+    float sunIntensity;
+    
+    if (dayCycle.IsEnabled)
+    {
+        sunAngle = dayCycle.SunElevation;
+        sunAzimuth = dayCycle.SunAzimuth;
+        sunIntensity = dayCycle.CurrentIntensity;
+    }
+    else
+    {
+        sunAngle = mManualSunAngle;
+        sunAzimuth = mManualSunAzimuth;
+        sunIntensity = params.SunIntensity;
+    }
 
     // Sun direction
-    float sunY = sinf(mSunAngle);
-    float sunXZ = cosf(mSunAngle);
-    mAtmosphereCB.SunDirection = { sunXZ * sinf(mSunAzimuth), sunY, sunXZ * cosf(mSunAzimuth) };
-    mAtmosphereCB.SunIntensity = params.SunIntensity;
+    float sunY = sinf(sunAngle);
+    float sunXZ = cosf(sunAngle);
+    mAtmosphereCB.SunDirection = { sunXZ * sinf(sunAzimuth), sunY, sunXZ * cosf(sunAzimuth) };
+    mAtmosphereCB.SunIntensity = sunIntensity;
 
     mAtmosphereCB.RayleighScattering = params.RayleighCoefficients;
     mAtmosphereCB.PlanetRadius = params.PlanetRadius;

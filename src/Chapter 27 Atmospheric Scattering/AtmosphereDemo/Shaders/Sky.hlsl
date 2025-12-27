@@ -86,7 +86,7 @@ float MiePhase(float cosTheta, float g)
     return num / max(denom, 0.0001);
 }
 
-// Compute atmospheric scattering
+// Compute atmospheric scattering with sunrise/sunset colors
 float3 ComputeAtmosphericScattering(float3 rayDir)
 {
     float3 sunDir = normalize(gSunDirection);
@@ -94,6 +94,9 @@ float3 ComputeAtmosphericScattering(float3 rayDir)
     
     // View angle from horizon
     float viewY = rayDir.y;
+    
+    // Sun height (elevation)
+    float sunHeight = sunDir.y;
     
     // Optical depth - increases as we look toward horizon
     float zenithAngle = acos(max(viewY, 0.001));
@@ -104,8 +107,7 @@ float3 ComputeAtmosphericScattering(float3 rayDir)
     float opticalDepthMie = opticalDepthRayleigh * gAtmosphereDensity * 0.1;
     
     // Rayleigh scattering coefficients at sea level
-    // These determine the blue color of the sky
-    float3 betaR = float3(5.8e-3, 13.5e-3, 33.1e-3); // More scattering for blue
+    float3 betaR = float3(5.8e-3, 13.5e-3, 33.1e-3);
     
     // Mie scattering coefficient (haze/pollution)
     float3 betaM = float3(21e-3, 21e-3, 21e-3) * gAtmosphereDensity;
@@ -114,14 +116,20 @@ float3 ComputeAtmosphericScattering(float3 rayDir)
     float phaseR = RayleighPhase(cosTheta);
     float phaseM = MiePhase(cosTheta, gMieAnisotropy);
     
-    // Extinction (how much light is absorbed/scattered out)
+    // Extinction
     float3 extinction = exp(-(betaR * opticalDepthRayleigh + betaM * opticalDepthMie));
     
-    // Sun transmittance (color of sunlight after passing through atmosphere)
-    float sunZenith = acos(max(sunDir.y, 0.001));
+    // Sun transmittance with enhanced sunset colors
+    float sunZenith = acos(max(sunHeight, 0.001));
     float sunOpticalDepth = 1.0 / max(cos(sunZenith), 0.035);
     sunOpticalDepth = min(sunOpticalDepth, 30.0);
-    float3 sunTransmittance = exp(-(betaR * sunOpticalDepth + betaM * sunOpticalDepth * 0.1));
+    
+    // Enhanced optical depth near horizon for more dramatic sunsets
+    float horizonFactor = 1.0 - abs(sunHeight);
+    horizonFactor = horizonFactor * horizonFactor * horizonFactor;
+    float enhancedSunOpticalDepth = sunOpticalDepth * (1.0 + horizonFactor * 2.0);
+    
+    float3 sunTransmittance = exp(-(betaR * enhancedSunOpticalDepth + betaM * enhancedSunOpticalDepth * 0.1));
     
     // In-scattering
     float3 rayleighScatter = betaR * phaseR * (1.0 - extinction);
@@ -131,8 +139,31 @@ float3 ComputeAtmosphericScattering(float3 rayDir)
     float3 sunColor = sunTransmittance * gSunIntensity;
     float3 inscatter = (rayleighScatter + mieScatter) * sunColor;
     
-    // Add ambient sky light (indirect illumination)
+    // Sunrise/Sunset gradient colors
+    float sunsetFactor = saturate(1.0 - abs(sunHeight) * 5.0); // Strong near horizon
+    float viewHorizonFactor = saturate(1.0 - abs(viewY) * 2.0);
+    
+    // Orange/red gradient for sunset/sunrise
+    float3 sunsetColor = float3(1.0, 0.4, 0.1) * sunsetFactor * viewHorizonFactor;
+    float3 horizonGlow = float3(1.0, 0.6, 0.3) * pow(max(cosTheta, 0.0), 4.0) * sunsetFactor;
+    
+    // Add sunset colors when sun is near horizon
+    if (sunHeight > -0.1 && sunHeight < 0.3)
+    {
+        float blendFactor = sunsetFactor * gSunIntensity * 0.05;
+        inscatter += (sunsetColor + horizonGlow) * blendFactor;
+    }
+    
+    // Ambient sky light
     float3 ambientSky = float3(0.05, 0.1, 0.2) * (1.0 - extinction) * gSunIntensity * 0.1;
+    
+    // Night sky - darker blue when sun is below horizon
+    if (sunHeight < 0.0)
+    {
+        float nightFactor = saturate(-sunHeight * 3.0);
+        ambientSky = lerp(ambientSky, float3(0.01, 0.02, 0.05), nightFactor);
+        inscatter *= (1.0 - nightFactor * 0.9);
+    }
     
     float3 skyColor = inscatter + ambientSky;
     
@@ -141,6 +172,14 @@ float3 ComputeAtmosphericScattering(float3 rayDir)
     {
         float groundFade = saturate(-viewY * 3.0);
         float3 groundColor = float3(0.4, 0.35, 0.3) * sunTransmittance * gSunIntensity * 0.05;
+        
+        // Darker ground at night
+        if (sunHeight < 0.0)
+        {
+            float nightFactor = saturate(-sunHeight * 3.0);
+            groundColor *= (1.0 - nightFactor * 0.8);
+        }
+        
         skyColor = lerp(skyColor, groundColor, groundFade);
     }
     
@@ -172,15 +211,37 @@ float4 PS(VertexOut pin) : SV_Target
     // Add sun disk
     float3 sunDir = normalize(gSunDirection);
     float sunDot = dot(rayDir, sunDir);
+    float sunHeight = sunDir.y;
     
-    // Sun disk
-    float sunDisk = smoothstep(0.9997, 0.9999, sunDot);
-    float3 sunColor = float3(1.0, 0.95, 0.9) * gSunIntensity * 0.15 * sunDisk;
+    // Sun disk - larger and more orange near horizon
+    float horizonFactor = saturate(1.0 - abs(sunHeight) * 3.0);
+    float sunSize = 0.9997 - horizonFactor * 0.001; // Slightly larger sun at horizon
+    float sunDisk = smoothstep(sunSize, 0.9999, sunDot);
     
-    // Sun corona/glow
-    float sunGlow = pow(max(sunDot, 0.0), 512.0) * gSunIntensity * 0.3;
+    // Sun color changes from white to orange/red at horizon
+    float3 sunDiskColor = lerp(
+        float3(1.0, 0.98, 0.95),  // White at high noon
+        float3(1.0, 0.5, 0.2),    // Orange at horizon
+        horizonFactor
+    );
+    
+    // Reduce sun intensity at night
+    float sunVisibility = saturate(sunHeight + 0.1) * 10.0;
+    sunVisibility = min(sunVisibility, 1.0);
+    
+    float3 sunColor = sunDiskColor * gSunIntensity * 0.15 * sunDisk * sunVisibility;
+    
+    // Sun corona/glow - more pronounced at sunset
+    float glowPower = lerp(512.0, 128.0, horizonFactor);
+    float sunGlow = pow(max(sunDot, 0.0), glowPower) * gSunIntensity * 0.3;
     sunGlow += pow(max(sunDot, 0.0), 64.0) * gSunIntensity * 0.05;
-    float3 glowColor = float3(1.0, 0.9, 0.7) * sunGlow;
+    sunGlow += pow(max(sunDot, 0.0), 8.0) * gSunIntensity * 0.02 * horizonFactor; // Extra glow at sunset
+    
+    float3 glowColor = lerp(
+        float3(1.0, 0.9, 0.7),    // Yellow glow normally
+        float3(1.0, 0.5, 0.2),    // Orange glow at sunset
+        horizonFactor
+    ) * sunGlow * sunVisibility;
     
     color += sunColor + glowColor;
     
