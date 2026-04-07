@@ -1,0 +1,44 @@
+# Build directories
+bin/
+obj/
+Debug/
+Release/
+x64/
+
+# Visual Studio files
+*.suo
+*.user
+*.sln.docstates
+*.vcxproj.user
+
+# Log files
+*.log
+engine.log
+
+# Compiled files
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.obj
+*.iobj
+*.ipdb
+
+# Visual Studio cache/options
+.vs/
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+[Bb]in/
+[Oo]bj/
