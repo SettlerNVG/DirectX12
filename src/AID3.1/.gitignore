@@ -1,0 +1,28 @@
+# Build directories
+bin/
+obj/
+x64/
+Debug/
+Release/
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+
+# Compiled files
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.iobj
+*.ipdb
+
+# Log files
+*.log

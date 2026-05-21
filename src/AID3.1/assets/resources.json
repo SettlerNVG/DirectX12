@@ -1,0 +1,39 @@
+{
+    "version": "1.0",
+    "description": "Resource manifest for AID3.1 - Resource Manager Demo",
+    "resources": [
+        {
+            "id": "skull_mesh",
+            "type": "mesh",
+            "path": "../Chapter 11 Stenciling/StencilDemo/Models/skull.txt",
+            "preload": true,
+            "description": "Skull 3D model from Chapter 11"
+        },
+        {
+            "id": "car_mesh",
+            "type": "mesh",
+            "path": "../Chapter 11 Stenciling/StencilDemo/Models/car.txt",
+            "preload": true,
+            "description": "Car 3D model from Chapter 11"
+        },
+        {
+            "id": "default_texture",
+            "type": "texture",
+            "path": "assets/default.png",
+            "preload": true,
+            "description": "Default white texture"
+        },
+        {
+            "id": "basic_shader",
+            "type": "shader",
+            "path": "assets/basic.hlsl",
+            "preload": false,
+            "description": "Basic vertex and pixel shader"
+        }
+    ],
+    "settings": {
+        "cache_enabled": true,
+        "hot_reload_enabled": true,
+        "async_loading": false
+    }
+}
