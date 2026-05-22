@@ -35,8 +35,20 @@ public:
     // Включить/выключить debug визуализацию
     void SetDebugDraw(bool enabled) { m_debugDraw = enabled; }
     bool IsDebugDrawEnabled() const { return m_debugDraw; }
+    
+    // Настройки sleeping объектов
+    void SetSleepThreshold(float threshold) { m_sleepThreshold = threshold; }
+    float GetSleepThreshold() const { return m_sleepThreshold; }
+    
+    void SetSleepTime(float time) { m_sleepTime = time; }
+    float GetSleepTime() const { return m_sleepTime; }
 
 private:
+    // Сброс состояний "на земле" в начале кадра
+    void ResetGroundedStates(World* world);
+    
+    // Обновление sleeping состояний объектов
+    void UpdateSleepingObjects(World* world, float deltaTime);
     // Применение гравитации
     void ApplyGravity(World* world, float deltaTime);
     
@@ -76,6 +88,11 @@ private:
     float m_fixedTimeStep;
     float m_accumulator;
     bool m_debugDraw;
+    
+    // Sleeping objects optimization
+    float m_sleepThreshold;  // Минимальная скорость для засыпания
+    float m_sleepTime;       // Время неподвижности до засыпания
+    int m_collisionCounter;  // Счетчик коллизий для отладки
     
     // Список обнаруженных коллизий
     std::vector<CollisionInfo> m_collisions;

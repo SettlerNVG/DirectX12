@@ -3,6 +3,7 @@
 #include "../Components/Transform.h"
 #include "../Components/Collider.h"
 #include "../Utils/Logger.h"
+#include <algorithm>
 
 using namespace DirectX;
 
@@ -26,6 +27,8 @@ void DebugRenderSystem::Update(World* world, float deltaTime) {
 void DebugRenderSystem::DrawColliders(World* world) {
     auto entities = world->GetEntitiesWith<Transform, Collider>();
     
+    LOG_INFO("DebugRenderSystem: Drawing " + std::to_string(entities.size()) + " colliders");
+    
     for (Entity entity : entities) {
         auto* transform = world->GetComponent<Transform>(entity);
         auto* collider = world->GetComponent<Collider>(entity);
@@ -37,9 +40,14 @@ void DebugRenderSystem::DrawColliders(World* world) {
         XMFLOAT3 center = collider->GetWorldCenter(transform->position);
         
         // Цвет в зависимости от типа коллайдера
-        XMFLOAT4 color = collider->isTrigger ? 
-            XMFLOAT4(0.0f, 1.0f, 0.0f, 0.5f) :  // Зелёный для триггеров
-            XMFLOAT4(1.0f, 1.0f, 0.0f, 0.5f);   // Жёлтый для обычных
+        XMFLOAT4 color;
+        if (collider->isTrigger) {
+            color = XMFLOAT4(0.0f, 1.0f, 0.0f, 0.7f);  // Зелёный для триггеров
+        } else if (collider->type == ColliderType::Sphere) {
+            color = XMFLOAT4(0.0f, 1.0f, 1.0f, 0.7f);  // Голубой для сфер
+        } else {
+            color = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.7f);  // Жёлтый для боксов
+        }
         
         if (collider->type == ColliderType::Box) {
             // Учитываем масштаб
@@ -51,7 +59,7 @@ void DebugRenderSystem::DrawColliders(World* world) {
             DrawAABB(center, scaledExtents, color);
         }
         else if (collider->type == ColliderType::Sphere) {
-            float radius = collider->halfExtents.x * std::max({transform->scale.x, transform->scale.y, transform->scale.z});
+            float radius = collider->halfExtents.x * (std::max)({transform->scale.x, transform->scale.y, transform->scale.z});
             DrawSphere(center, radius, color);
         }
     }

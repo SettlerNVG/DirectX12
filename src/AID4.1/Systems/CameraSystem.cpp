@@ -2,7 +2,6 @@
 #include "../ECS/World.h"
 #include "../Components/Transform.h"
 #include "../Components/Camera.h"
-#include "../Input/InputManager.h"
 #include "../Utils/Logger.h"
 
 using namespace DirectX;
@@ -11,11 +10,15 @@ CameraSystem::CameraSystem(RenderAdapter* renderer, HWND hwnd)
     : m_renderer(renderer)
     , m_hwnd(hwnd)
     , m_mouseCaptured(false)
-    , m_firstCapture(true) {
-    LOG_INFO("CameraSystem created with InputManager integration");
+    , m_firstCapture(true)
+    , m_firstMouse(true)
+    , m_lastMouseX(0.0f)
+    , m_lastMouseY(0.0f) {
+    LOG_INFO("CameraSystem created");
 }
 
 void CameraSystem::Update(World* world, float deltaTime) {
+    // Получаем все сущности с Transform и Camera
     auto entities = world->GetEntitiesWith<Transform, Camera>();
     
     for (Entity entity : entities) {
@@ -44,34 +47,47 @@ void CameraSystem::HandleInput(World* world, Entity cameraEntity, float deltaTim
         return;
     }
     
-    auto& input = InputManager::GetInstance();
-    
     // Захват/освобождение мыши по правой кнопке
-    if (input.IsMouseButtonPressed(KeyCode::MouseRight)) {
+    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) {
         if (!m_mouseCaptured) {
             m_mouseCaptured = true;
-            m_firstCapture = true;
-            input.ShowCursor(false);
-            input.CenterCursor();
+            m_firstMouse = true;
+            ShowCursor(FALSE);
+            
+            // Центрируем курсор
+            RECT rect;
+            GetClientRect(m_hwnd, &rect);
+            POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+            ClientToScreen(m_hwnd, &center);
+            SetCursorPos(center.x, center.y);
         }
     } else {
         if (m_mouseCaptured) {
             m_mouseCaptured = false;
-            input.ShowCursor(true);
+            ShowCursor(TRUE);
         }
     }
     
     // Управление мышью (только если захвачена)
     if (m_mouseCaptured) {
-        if (m_firstCapture) {
-            m_firstCapture = false;
-            input.CenterCursor();
+        POINT mousePos;
+        GetCursorPos(&mousePos);
+        ScreenToClient(m_hwnd, &mousePos);
+        
+        if (m_firstMouse) {
+            m_lastMouseX = mousePos.x;
+            m_lastMouseY = mousePos.y;
+            m_firstMouse = false;
         }
         
-        XMFLOAT2 mouseDelta = input.GetMouseDelta();
+        int deltaX = mousePos.x - m_lastMouseX;
+        int deltaY = mousePos.y - m_lastMouseY;
         
-        camera->yaw += mouseDelta.x * camera->lookSpeed;
-        camera->pitch -= mouseDelta.y * camera->lookSpeed;
+        m_lastMouseX = mousePos.x;
+        m_lastMouseY = mousePos.y;
+        
+        camera->yaw += deltaX * camera->lookSpeed;
+        camera->pitch -= deltaY * camera->lookSpeed;
         
         // Ограничение pitch
         const float maxPitch = XM_PIDIV2 - 0.01f;
@@ -79,38 +95,44 @@ void CameraSystem::HandleInput(World* world, Entity cameraEntity, float deltaTim
         if (camera->pitch < -maxPitch) camera->pitch = -maxPitch;
         
         // Возвращаем курсор в центр
-        input.CenterCursor();
+        RECT rect;
+        GetClientRect(m_hwnd, &rect);
+        POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+        ClientToScreen(m_hwnd, &center);
+        SetCursorPos(center.x, center.y);
+        m_lastMouseX = (rect.right - rect.left) / 2;
+        m_lastMouseY = (rect.bottom - rect.top) / 2;
     }
     
-    // Управление WASD + QE
+    // Управление WASD
     XMVECTOR forward = camera->GetForward();
     XMVECTOR right = camera->GetRight();
     XMVECTOR up = camera->GetUp();
     
     XMVECTOR movement = XMVectorZero();
     
-    if (input.IsKeyPressed(KeyCode::W)) {
+    if (GetAsyncKeyState('W') & 0x8000) {
         movement = XMVectorAdd(movement, forward);
     }
-    if (input.IsKeyPressed(KeyCode::S)) {
+    if (GetAsyncKeyState('S') & 0x8000) {
         movement = XMVectorSubtract(movement, forward);
     }
-    if (input.IsKeyPressed(KeyCode::D)) {
+    if (GetAsyncKeyState('D') & 0x8000) {
         movement = XMVectorAdd(movement, right);
     }
-    if (input.IsKeyPressed(KeyCode::A)) {
+    if (GetAsyncKeyState('A') & 0x8000) {
         movement = XMVectorSubtract(movement, right);
     }
-    if (input.IsKeyPressed(KeyCode::E)) {
+    if (GetAsyncKeyState('E') & 0x8000) {
         movement = XMVectorAdd(movement, up);
     }
-    if (input.IsKeyPressed(KeyCode::Q)) {
+    if (GetAsyncKeyState('Q') & 0x8000) {
         movement = XMVectorSubtract(movement, up);
     }
     
     // Ускорение на Shift
     float speed = camera->moveSpeed;
-    if (input.IsKeyPressed(KeyCode::Shift)) {
+    if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
         speed *= 2.0f;
     }
     

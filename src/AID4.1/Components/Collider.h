@@ -1,6 +1,11 @@
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <DirectXMath.h>
+#include <algorithm>
 
 // Типы коллайдеров
 enum class ColliderType {
@@ -64,7 +69,10 @@ struct AABB {
     DirectX::XMFLOAT3 min;
     DirectX::XMFLOAT3 max;
     
-    AABB() : min(0, 0, 0), max(0, 0, 0) {}
+    AABB() {
+        min = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+        max = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+    }
     
     AABB(const DirectX::XMFLOAT3& center, const DirectX::XMFLOAT3& halfExtents) {
         min.x = center.x - halfExtents.x;
@@ -105,15 +113,15 @@ struct AABB {
         
         float overlapX1 = max.x - other.min.x;
         float overlapX2 = other.max.x - min.x;
-        depth.x = (overlapX1 < overlapX2) ? overlapX1 : -overlapX2;
+        depth.x = ((std::min)(overlapX1, overlapX2) == overlapX1) ? overlapX1 : -overlapX2;
         
         float overlapY1 = max.y - other.min.y;
         float overlapY2 = other.max.y - min.y;
-        depth.y = (overlapY1 < overlapY2) ? overlapY1 : -overlapY2;
+        depth.y = ((std::min)(overlapY1, overlapY2) == overlapY1) ? overlapY1 : -overlapY2;
         
         float overlapZ1 = max.z - other.min.z;
         float overlapZ2 = other.max.z - min.z;
-        depth.z = (overlapZ1 < overlapZ2) ? overlapZ1 : -overlapZ2;
+        depth.z = ((std::min)(overlapZ1, overlapZ2) == overlapZ1) ? overlapZ1 : -overlapZ2;
         
         return depth;
     }

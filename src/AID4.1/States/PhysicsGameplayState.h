@@ -3,6 +3,7 @@
 #include "GameState.h"
 #include "../ECS/Entity.h"
 #include <DirectXMath.h>
+#include <vector>
 
 // Состояние игры с физикой
 class PhysicsGameplayState : public GameState {

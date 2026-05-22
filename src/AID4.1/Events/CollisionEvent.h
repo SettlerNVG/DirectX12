@@ -1,10 +1,11 @@
 #pragma once
 
 #include "../ECS/Entity.h"
+#include "EventBus.h"
 #include <DirectXMath.h>
 
 // Событие коллизии
-struct CollisionEvent {
+struct CollisionEvent : public Event {
     Entity entityA;
     Entity entityB;
     DirectX::XMFLOAT3 normal;           // Нормаль столкновения
@@ -15,8 +16,8 @@ struct CollisionEvent {
     CollisionEvent()
         : entityA(NULL_ENTITY)
         , entityB(NULL_ENTITY)
-        , normal(0, 0, 0)
-        , contactPoint(0, 0, 0)
+        , normal(0.0f, 0.0f, 0.0f)
+        , contactPoint(0.0f, 0.0f, 0.0f)
         , penetrationDepth(0.0f)
         , isTrigger(false) {
     }
@@ -25,7 +26,7 @@ struct CollisionEvent {
         : entityA(a)
         , entityB(b)
         , normal(n)
-        , contactPoint(0, 0, 0)
+        , contactPoint(0.0f, 0.0f, 0.0f)
         , penetrationDepth(depth)
         , isTrigger(trigger) {
     }

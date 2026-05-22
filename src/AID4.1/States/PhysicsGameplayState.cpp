@@ -139,7 +139,7 @@ void PhysicsGameplayState::CreateFallingObjects() {
     };
     
     std::vector<ObjectConfig> configs = {
-        // Кубы
+        // Кубы с ХОРОШИМ отскоком
         { XMFLOAT3(-5.0f, 10.0f, 0.0f), XMFLOAT3(1.0f, 1.0f, 1.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f), PrimitiveType::Cube, ColliderType::Box, 1.0f, "Red Cube" },
         { XMFLOAT3(-2.0f, 12.0f, 0.0f), XMFLOAT3(1.2f, 1.2f, 1.2f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f), PrimitiveType::Cube, ColliderType::Box, 1.5f, "Green Cube" },
         { XMFLOAT3(2.0f, 8.0f, 0.0f), XMFLOAT3(0.8f, 0.8f, 0.8f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f), PrimitiveType::Cube, ColliderType::Box, 0.8f, "Blue Cube" },
@@ -156,10 +156,10 @@ void PhysicsGameplayState::CreateFallingObjects() {
         world->AddComponent(entity, Transform(config.position, XMFLOAT3(0, 0, 0), config.scale));
         world->AddComponent(entity, MeshRenderer(config.type, config.color));
         
-        // Rigidbody с гравитацией
+        // Rigidbody с УЛУЧШЕННЫМИ параметрами для стабильности
         Rigidbody rb(config.mass, true);
-        rb.restitution = 0.4f;  // Немного упругости
-        rb.drag = 0.05f;
+        rb.restitution = 0.3f;  // Уменьшил отскок для стабильности
+        rb.drag = 0.05f;        // Увеличил сопротивление для быстрого затухания
         world->AddComponent(entity, rb);
         
         // Коллайдер
@@ -191,10 +191,10 @@ void PhysicsGameplayState::CreatePlayerControlledObject() {
         XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f)  // Оранжевый
     ));
     
-    // Rigidbody с возможностью управления
+    // Rigidbody с ХОРОШИМ управлением
     Rigidbody rb(2.0f, true);
-    rb.restitution = 0.3f;
-    rb.drag = 0.1f;
+    rb.restitution = 0.1f;  // Минимальный отскок для игрока
+    rb.drag = 0.8f;         // БОЛЬШОЕ сопротивление - быстро останавливается
     world->AddComponent(m_player, rb);
     
     world->AddComponent(m_player, Collider::CreateBox(0.75f, 0.75f, 0.75f));
@@ -213,27 +213,56 @@ void PhysicsGameplayState::SetupInputBindings() {
     input.BindAction("Jump", KeyCode::Space);
     input.BindAction("ToggleDebug", KeyCode::F3);
     
+    // Явно регистрируем клавиши для отслеживания
+    input.BindAction("SpaceKey", KeyCode::Space);
+    input.BindAction("CameraW", KeyCode::W);
+    input.BindAction("CameraA", KeyCode::A);
+    input.BindAction("CameraS", KeyCode::S);
+    input.BindAction("CameraD", KeyCode::D);
+    input.BindAction("CameraQ", KeyCode::Q);
+    input.BindAction("CameraE", KeyCode::E);
+    
     LOG_INFO("Input bindings configured");
 }
 
 void PhysicsGameplayState::SetupCollisionHandlers() {
-    // Подписываемся на события коллизий
+    // Подписываемся на события коллизий с улучшенной обработкой
     SUBSCRIBE_TO_EVENT(CollisionEvent, [this](const CollisionEvent& event) {
         m_collisionCount++;
         
         auto* world = m_app->GetWorld();
+        if (!world) return;
+        
         auto* tagA = world->GetComponent<Tag>(event.entityA);
         auto* tagB = world->GetComponent<Tag>(event.entityB);
         
         std::string nameA = tagA ? tagA->name : "Unknown";
         std::string nameB = tagB ? tagB->name : "Unknown";
         
-        if (m_collisionCount % 10 == 0) {  // Логируем каждую 10-ю коллизию
-            LOG_INFO("Collision #" + std::to_string(m_collisionCount) + ": " + nameA + " <-> " + nameB);
+        // Логируем только важные коллизии или каждую 20-ю для уменьшения спама
+        bool shouldLog = false;
+        
+        // Всегда логируем коллизии с игроком
+        if (nameA == "Player" || nameB == "Player") {
+            shouldLog = true;
+        }
+        // Или каждую 20-ю коллизию для общей статистики
+        else if (m_collisionCount % 20 == 0) {
+            shouldLog = true;
+        }
+        
+        if (shouldLog) {
+            std::string triggerInfo = event.isTrigger ? " (TRIGGER)" : "";
+            LOG_INFO("Collision #" + std::to_string(m_collisionCount) + ": " + nameA + " <-> " + nameB + triggerInfo);
+        }
+        
+        // Специальная обработка коллизий игрока с землей
+        if ((nameA == "Player" && nameB == "Ground") || (nameA == "Ground" && nameB == "Player")) {
+            // Можно добавить звуковые эффекты или другую логику
         }
     });
     
-    LOG_INFO("Collision handlers configured");
+    LOG_INFO("Enhanced collision handlers configured");
 }
 
 void PhysicsGameplayState::Update(float deltaTime) {
@@ -242,8 +271,16 @@ void PhysicsGameplayState::Update(float deltaTime) {
     auto& input = InputManager::GetInstance();
     auto* world = m_app->GetWorld();
     
+    if (!world) {
+        LOG_INFO("ERROR: World is null in PhysicsGameplayState::Update");
+        return;
+    }
+    
     // Переключение debug-отрисовки по F3
-    if (input.IsKeyDown(KeyCode::F3)) {
+    static bool f3WasPressed = false;
+    bool f3IsPressed = input.IsKeyPressed(KeyCode::F3);
+    
+    if (f3IsPressed && !f3WasPressed) {
         m_debugDrawEnabled = !m_debugDrawEnabled;
         
         if (auto* debugSys = world->GetSystem<DebugRenderSystem>()) {
@@ -255,14 +292,70 @@ void PhysicsGameplayState::Update(float deltaTime) {
         
         LOG_INFO(m_debugDrawEnabled ? "Debug draw ENABLED" : "Debug draw DISABLED");
     }
+    f3WasPressed = f3IsPressed;
+    
+    // ЗАЩИТА: Проверяем, что объекты не упали под пол
+    for (Entity entity : m_fallingObjects) {
+        if (world->IsEntityValid(entity)) {
+            auto* transform = world->GetComponent<Transform>(entity);
+            auto* rb = world->GetComponent<Rigidbody>(entity);
+            
+            if (transform && rb && transform->position.y < -10.0f) {
+                // Объект упал слишком низко - возвращаем наверх
+                transform->position.y = 15.0f + (rand() % 10); // Случайная высота 15-25
+                transform->position.x = -5.0f + (rand() % 11); // Случайная позиция X от -5 до 5
+                transform->position.z = -5.0f + (rand() % 11); // Случайная позиция Z от -5 до 5
+                rb->velocity = XMFLOAT3(0, 0, 0); // Сбрасываем скорость
+                rb->isSleeping = false; // Пробуждаем объект
+                rb->sleepTimer = 0.0f;
+                
+                auto* tag = world->GetComponent<Tag>(entity);
+                std::string name = tag ? tag->name : "Unknown";
+                LOG_INFO("Respawned fallen object: " + name);
+            }
+            
+            // ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: Проверяем на NaN значения
+            if (transform && (isnan(transform->position.x) || isnan(transform->position.y) || isnan(transform->position.z))) {
+                LOG_INFO("ERROR: NaN position detected, resetting object");
+                transform->position = XMFLOAT3(0.0f, 10.0f, 0.0f);
+                if (rb) {
+                    rb->velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                    rb->acceleration = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                    rb->isSleeping = false;
+                    rb->sleepTimer = 0.0f;
+                }
+            }
+            
+            if (rb && (isnan(rb->velocity.x) || isnan(rb->velocity.y) || isnan(rb->velocity.z))) {
+                LOG_INFO("ERROR: NaN velocity detected, resetting velocity");
+                rb->velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                rb->acceleration = XMFLOAT3(0.0f, 0.0f, 0.0f);
+            }
+        }
+    }
     
     // Управление игроком через стрелки
     if (world->IsEntityValid(m_player)) {
         auto* rb = world->GetComponent<Rigidbody>(m_player);
+        auto* transform = world->GetComponent<Transform>(m_player);
         
-        if (rb) {
+        if (rb && transform) {
+            // ЗАЩИТА: Проверяем на NaN значения у игрока
+            if (isnan(transform->position.x) || isnan(transform->position.y) || isnan(transform->position.z)) {
+                LOG_INFO("ERROR: Player NaN position detected, resetting");
+                transform->position = XMFLOAT3(0.0f, 2.0f, 5.0f);
+                rb->velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                rb->acceleration = XMFLOAT3(0.0f, 0.0f, 0.0f);
+            }
+            
+            if (isnan(rb->velocity.x) || isnan(rb->velocity.y) || isnan(rb->velocity.z)) {
+                LOG_INFO("ERROR: Player NaN velocity detected, resetting");
+                rb->velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                rb->acceleration = XMFLOAT3(0.0f, 0.0f, 0.0f);
+            }
+            
             XMFLOAT3 force(0, 0, 0);
-            float forceMagnitude = 15.0f;
+            float forceMagnitude = 25.0f;  // Увеличил силу движения
             
             if (input.IsActionActive("MoveForward")) {
                 force.z += forceMagnitude;
@@ -277,15 +370,73 @@ void PhysicsGameplayState::Update(float deltaTime) {
                 force.x += forceMagnitude;
             }
             
-            // Прыжок
-            if (input.IsActionTriggered("Jump")) {
-                XMFLOAT3 jumpImpulse(0, 8.0f, 0);
-                rb->AddImpulse(jumpImpulse);
-                LOG_INFO("Player jumped!");
+            // Прыжок - УЛУЧШЕННАЯ проверка с определением "на земле"
+            static bool spaceWasPressed = false;
+            bool spaceIsPressed = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+            
+            if (spaceIsPressed && !spaceWasPressed) {
+                // УЛУЧШЕННАЯ проверка: проверяем есть ли коллизия с землей снизу
+                bool canJump = false;
+                
+                // Метод 1: Проверяем вертикальную скорость (должна быть близка к 0)
+                if (fabsf(rb->velocity.y) < 2.0f) { // Увеличил порог
+                    canJump = true;
+                }
+                
+                // Метод 2: Дополнительная проверка - не слишком высоко над землей
+                if (transform->position.y > 10.0f) { // Если слишком высоко - точно не на земле
+                    canJump = false;
+                }
+                
+                // Метод 3: Проверяем коллизии с землей (raycast вниз)
+                auto* world = m_app->GetWorld();
+                auto entities = world->GetEntitiesWith<Transform, Collider>();
+                
+                bool groundNearby = false;
+                for (Entity entity : entities) {
+                    if (entity == m_player) continue; // Пропускаем себя
+                    
+                    auto* otherTransform = world->GetComponent<Transform>(entity);
+                    auto* tag = world->GetComponent<Tag>(entity);
+                    
+                    if (otherTransform && tag && tag->name == "Ground") {
+                        // Проверяем расстояние до земли
+                        float distanceToGround = transform->position.y - otherTransform->position.y;
+                        if (distanceToGround < 3.0f && distanceToGround > -1.0f) { // В пределах разумного
+                            groundNearby = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (canJump && groundNearby) {
+                    XMFLOAT3 jumpImpulse(0, 12.0f, 0); // Увеличил силу прыжка
+                    rb->AddImpulse(jumpImpulse);
+                    rb->isSleeping = false; // Пробуждаем при прыжке
+                    rb->sleepTimer = 0.0f;
+                    LOG_INFO("Player jumped! Y velocity was: " + std::to_string(rb->velocity.y) + ", Ground nearby: " + (groundNearby ? "YES" : "NO"));
+                } else {
+                    LOG_INFO("Player can't jump - Y velocity: " + std::to_string(rb->velocity.y) + 
+                            ", Y pos: " + std::to_string(transform->position.y) + 
+                            ", Ground nearby: " + (groundNearby ? "YES" : "NO"));
+                }
             }
+            spaceWasPressed = spaceIsPressed;
             
             if (force.x != 0 || force.z != 0) {
                 rb->AddForce(force);
+                rb->isSleeping = false; // Пробуждаем при движении
+                rb->sleepTimer = 0.0f;
+            }
+            
+            // ЗАЩИТА: Если игрок упал слишком низко
+            if (transform->position.y < -10.0f) {
+                LOG_INFO("Player fell too low, respawning");
+                transform->position = XMFLOAT3(0.0f, 2.0f, 5.0f);
+                rb->velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                rb->acceleration = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                rb->isSleeping = false;
+                rb->sleepTimer = 0.0f;
             }
         }
     }
@@ -319,13 +470,15 @@ void PhysicsGameplayState::Render() {
         
         TextOutW(hdc, 10, 40, L"Camera: RMB + Mouse + WASD/QE", 30);
         TextOutW(hdc, 10, 60, L"Player: Arrow Keys + Space (Jump)", 34);
-        TextOutW(hdc, 10, 80, L"F3 - Toggle Debug Draw", 22);
+        TextOutW(hdc, 10, 80, L"F3 - Toggle Collider Wireframes", 32);
         TextOutW(hdc, 10, 100, L"ESC - Back to Menu", 18);
         
         std::wstring collisionText = L"Collisions: " + std::to_wstring(m_collisionCount);
         TextOutW(hdc, 10, 130, collisionText.c_str(), static_cast<int>(collisionText.length()));
         
-        std::wstring debugText = m_debugDrawEnabled ? L"Debug: ON" : L"Debug: OFF";
+        std::wstring debugText = m_debugDrawEnabled ? 
+            L"Debug Wireframes: ON (Yellow=Box, Cyan=Sphere)" : 
+            L"Debug Wireframes: OFF";
         SetTextColor(hdc, m_debugDrawEnabled ? RGB(0, 255, 0) : RGB(255, 0, 0));
         TextOutW(hdc, 10, 150, debugText.c_str(), static_cast<int>(debugText.length()));
         

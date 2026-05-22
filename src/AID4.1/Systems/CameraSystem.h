@@ -25,4 +25,7 @@ private:
     // Для управления мышью
     bool m_mouseCaptured;
     bool m_firstCapture;
+    bool m_firstMouse;
+    float m_lastMouseX;
+    float m_lastMouseY;
 };

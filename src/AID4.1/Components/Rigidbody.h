@@ -12,6 +12,12 @@ struct Rigidbody {
     float drag;                       // Сопротивление воздуха (0-1)
     float restitution;                // Коэффициент упругости (0-1)
     
+    // Sleeping optimization fields
+    bool isSleeping;                  // Объект спит (не обрабатывается физикой)
+    float sleepTimer;                 // Время неподвижности
+    bool isGrounded;                  // Объект касается земли (для стабилизации)
+    float groundContactTime;          // Время контакта с землей
+    
     Rigidbody()
         : velocity(0.0f, 0.0f, 0.0f)
         , acceleration(0.0f, 0.0f, 0.0f)
@@ -19,7 +25,11 @@ struct Rigidbody {
         , useGravity(true)
         , isKinematic(false)
         , drag(0.01f)
-        , restitution(0.3f) {
+        , restitution(0.3f)
+        , isSleeping(false)
+        , sleepTimer(0.0f)
+        , isGrounded(false)
+        , groundContactTime(0.0f) {
     }
     
     Rigidbody(float m, bool gravity = true)
@@ -29,7 +39,11 @@ struct Rigidbody {
         , useGravity(gravity)
         , isKinematic(false)
         , drag(0.01f)
-        , restitution(0.3f) {
+        , restitution(0.3f)
+        , isSleeping(false)
+        , sleepTimer(0.0f)
+        , isGrounded(false)
+        , groundContactTime(0.0f) {
     }
     
     // Добавить силу (F = ma)

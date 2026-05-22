@@ -29,19 +29,26 @@ void InputManager::Update() {
     
     // Обновляем состояния всех отслеживаемых клавиш
     for (auto& pair : m_keyStates) {
-        pair.second = (GetAsyncKeyState(static_cast<int>(pair.first)) & 0x8000) != 0;
+        SHORT keyState = GetAsyncKeyState(static_cast<int>(pair.first));
+        pair.second = (keyState & 0x8000) != 0;
     }
     
-    // Обновляем позицию мыши
-    POINT pt;
-    GetCursorPos(&pt);
-    ScreenToClient(m_hwnd, &pt);
-    
-    m_mousePosition = XMFLOAT2(static_cast<float>(pt.x), static_cast<float>(pt.y));
-    m_mouseDelta = XMFLOAT2(
-        m_mousePosition.x - m_prevMousePosition.x,
-        m_mousePosition.y - m_prevMousePosition.y
-    );
+    // Обновляем позицию мыши с проверкой валидности окна
+    if (m_hwnd && IsWindow(m_hwnd)) {
+        POINT pt;
+        if (GetCursorPos(&pt) && ScreenToClient(m_hwnd, &pt)) {
+            m_mousePosition = XMFLOAT2(static_cast<float>(pt.x), static_cast<float>(pt.y));
+            m_mouseDelta = XMFLOAT2(
+                m_mousePosition.x - m_prevMousePosition.x,
+                m_mousePosition.y - m_prevMousePosition.y
+            );
+        } else {
+            // Если не удалось получить позицию мыши, обнуляем дельту
+            m_mouseDelta = XMFLOAT2(0.0f, 0.0f);
+        }
+    } else {
+        m_mouseDelta = XMFLOAT2(0.0f, 0.0f);
+    }
     
     // Сброс колеса мыши (обновляется через WM_MOUSEWHEEL)
     m_mouseWheelDelta = 0.0f;
@@ -53,8 +60,9 @@ bool InputManager::IsKeyPressed(KeyCode key) const {
         return it->second;
     }
     
-    // Если клавиша не отслеживается, проверяем напрямую
-    return (GetAsyncKeyState(static_cast<int>(key)) & 0x8000) != 0;
+    // Если клавиша не отслеживается, проверяем напрямую с защитой от ошибок
+    SHORT keyState = GetAsyncKeyState(static_cast<int>(key));
+    return (keyState & 0x8000) != 0;
 }
 
 bool InputManager::IsKeyDown(KeyCode key) const {
@@ -95,20 +103,27 @@ void InputManager::ShowCursor(bool show) {
 }
 
 void InputManager::SetCursorPosition(int x, int y) {
+    if (!m_hwnd || !IsWindow(m_hwnd)) {
+        return;
+    }
+    
     POINT pt = { x, y };
-    ClientToScreen(m_hwnd, &pt);
-    ::SetCursorPos(pt.x, pt.y);
+    if (ClientToScreen(m_hwnd, &pt)) {
+        ::SetCursorPos(pt.x, pt.y);
+    }
 }
 
 void InputManager::CenterCursor() {
-    if (!m_hwnd) return;
+    if (!m_hwnd || !IsWindow(m_hwnd)) {
+        return;
+    }
     
     RECT rect;
-    GetClientRect(m_hwnd, &rect);
-    int centerX = (rect.right - rect.left) / 2;
-    int centerY = (rect.bottom - rect.top) / 2;
-    
-    SetCursorPosition(centerX, centerY);
+    if (GetClientRect(m_hwnd, &rect)) {
+        int centerX = (rect.right - rect.left) / 2;
+        int centerY = (rect.bottom - rect.top) / 2;
+        SetCursorPosition(centerX, centerY);
+    }
 }
 
 void InputManager::BindAction(const std::string& actionName, KeyCode key) {

@@ -3,6 +3,7 @@
 #include "../Components/Transform.h"
 #include "../Components/Rigidbody.h"
 #include "../Components/Collider.h"
+#include "../Components/Tag.h"
 #include "../Events/EventBus.h"
 #include "../Events/CollisionEvent.h"
 #include "../Utils/Logger.h"
@@ -14,7 +15,10 @@ PhysicsSystem::PhysicsSystem()
     : m_gravity(0.0f, -9.81f, 0.0f)
     , m_fixedTimeStep(1.0f / 60.0f)
     , m_accumulator(0.0f)
-    , m_debugDraw(false) {
+    , m_debugDraw(false)
+    , m_collisionCounter(0)
+    , m_sleepThreshold(0.2f)  // Увеличил порог для более быстрого засыпания
+    , m_sleepTime(0.5f) {     // Уменьшил время до засыпания
     LOG_INFO("PhysicsSystem created with gravity: (0, -9.81, 0)");
 }
 
@@ -26,17 +30,25 @@ void PhysicsSystem::Update(World* world, float deltaTime) {
     const int maxIterations = 5; // Предотвращаем spiral of death
     
     while (m_accumulator >= m_fixedTimeStep && iterations < maxIterations) {
-        // 1. Применяем гравитацию
+        // 0. НОВОЕ: Сбрасываем состояние "на земле" в начале каждого кадра
+        ResetGroundedStates(world);
+        
+        // 1. Обновляем sleeping состояния
+        UpdateSleepingObjects(world, m_fixedTimeStep);
+        
+        // 2. Применяем гравитацию
         ApplyGravity(world, m_fixedTimeStep);
         
-        // 2. Интегрируем физику (обновляем позиции)
+        // 3. Интегрируем физику (обновляем позиции)
         IntegratePhysics(world, m_fixedTimeStep);
         
-        // 3. Обнаруживаем коллизии
+        // 4. Обнаруживаем коллизии
         DetectCollisions(world);
         
-        // 4. Разрешаем коллизии
-        ResolveCollisions(world);
+        // 5. Разрешаем коллизии (несколько итераций для стабильности)
+        for (int i = 0; i < 3; ++i) {
+            ResolveCollisions(world);
+        }
         
         m_accumulator -= m_fixedTimeStep;
         iterations++;
@@ -48,13 +60,45 @@ void PhysicsSystem::Update(World* world, float deltaTime) {
     }
 }
 
+void PhysicsSystem::UpdateSleepingObjects(World* world, float deltaTime) {
+    auto entities = world->GetEntitiesWith<Rigidbody>();
+    
+    for (Entity entity : entities) {
+        auto* rb = world->GetComponent<Rigidbody>(entity);
+        
+        if (!rb || rb->isKinematic) {
+            continue;
+        }
+        
+        // Вычисляем скорость
+        XMVECTOR velocity = XMLoadFloat3(&rb->velocity);
+        float speed = XMVectorGetX(XMVector3Length(velocity));
+        
+        // Если объект медленно движется
+        if (speed < m_sleepThreshold) {
+            rb->sleepTimer += deltaTime;
+            
+            // Если объект неподвижен достаточно долго - усыпляем
+            if (rb->sleepTimer > m_sleepTime) {
+                rb->isSleeping = true;
+                rb->velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                rb->acceleration = XMFLOAT3(0.0f, 0.0f, 0.0f);
+            }
+        } else {
+            // Объект движется - просыпаем
+            rb->sleepTimer = 0.0f;
+            rb->isSleeping = false;
+        }
+    }
+}
+
 void PhysicsSystem::ApplyGravity(World* world, float deltaTime) {
     auto entities = world->GetEntitiesWith<Rigidbody>();
     
     for (Entity entity : entities) {
         auto* rb = world->GetComponent<Rigidbody>(entity);
         
-        if (!rb || !rb->useGravity || rb->isKinematic) {
+        if (!rb || !rb->useGravity || rb->isKinematic || rb->isSleeping) {
             continue;
         }
         
@@ -73,7 +117,7 @@ void PhysicsSystem::IntegratePhysics(World* world, float deltaTime) {
         auto* transform = world->GetComponent<Transform>(entity);
         auto* rb = world->GetComponent<Rigidbody>(entity);
         
-        if (!transform || !rb || rb->isKinematic) {
+        if (!transform || !rb || rb->isKinematic || rb->isSleeping) {
             continue;
         }
         
@@ -96,6 +140,14 @@ void PhysicsSystem::IntegratePhysics(World* world, float deltaTime) {
         
         // Сбрасываем ускорение
         rb->acceleration = XMFLOAT3(0.0f, 0.0f, 0.0f);
+        
+        // Проверяем границы мира (защита от падения в бесконечность)
+        if (transform->position.y < -50.0f) {
+            transform->position.y = 20.0f;
+            rb->velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+            rb->isSleeping = false;
+            rb->sleepTimer = 0.0f;
+        }
     }
 }
 
@@ -119,6 +171,18 @@ void PhysicsSystem::DetectCollisions(World* world) {
                 continue;
             }
             
+            // ОПТИМИЗАЦИЯ: Пропускаем коллизии со спящими объектами
+            auto* rbA = world->GetComponent<Rigidbody>(entityA);
+            auto* rbB = world->GetComponent<Rigidbody>(entityB);
+            
+            bool aIsSleeping = (rbA && rbA->isSleeping && !rbA->isKinematic);
+            bool bIsSleeping = (rbB && rbB->isSleeping && !rbB->isKinematic);
+            
+            // Если оба объекта спят - пропускаем
+            if (aIsSleeping && bIsSleeping) {
+                continue;
+            }
+            
             CollisionInfo info;
             info.entityA = entityA;
             info.entityB = entityB;
@@ -135,7 +199,10 @@ void PhysicsSystem::DetectCollisions(World* world) {
             else if (colliderA->type == ColliderType::Sphere && colliderB->type == ColliderType::Sphere) {
                 XMFLOAT3 centerA = colliderA->GetWorldCenter(transformA->position);
                 XMFLOAT3 centerB = colliderB->GetWorldCenter(transformB->position);
-                collided = CheckSphereCollision(centerA, colliderA->halfExtents.x, centerB, colliderB->halfExtents.x, info);
+                // ВАЖНО: Учитываем масштаб для радиуса!
+                float radiusA = colliderA->halfExtents.x * (std::max)({transformA->scale.x, transformA->scale.y, transformA->scale.z});
+                float radiusB = colliderB->halfExtents.x * (std::max)({transformB->scale.x, transformB->scale.y, transformB->scale.z});
+                collided = CheckSphereCollision(centerA, radiusA, centerB, radiusB, info);
             }
             else {
                 // AABB vs Sphere
@@ -146,11 +213,13 @@ void PhysicsSystem::DetectCollisions(World* world) {
                 if (colliderA->type == ColliderType::Box) {
                     aabb = GetAABB(world, entityA);
                     sphereCenter = colliderB->GetWorldCenter(transformB->position);
-                    sphereRadius = colliderB->halfExtents.x;
+                    // ВАЖНО: Учитываем масштаб!
+                    sphereRadius = colliderB->halfExtents.x * (std::max)({transformB->scale.x, transformB->scale.y, transformB->scale.z});
                 } else {
                     aabb = GetAABB(world, entityB);
                     sphereCenter = colliderA->GetWorldCenter(transformA->position);
-                    sphereRadius = colliderA->halfExtents.x;
+                    // ВАЖНО: Учитываем масштаб!
+                    sphereRadius = colliderA->halfExtents.x * (std::max)({transformA->scale.x, transformA->scale.y, transformA->scale.z});
                 }
                 
                 collided = CheckAABBSphereCollision(aabb, sphereCenter, sphereRadius, info);
@@ -159,9 +228,22 @@ void PhysicsSystem::DetectCollisions(World* world) {
             if (collided) {
                 m_collisions.push_back(info);
                 
-                // Публикуем событие коллизии
-                CollisionEvent event(entityA, entityB, info.normal, info.penetrationDepth, info.isTrigger);
-                PUBLISH_EVENT(event);
+                // ОПТИМИЗАЦИЯ: Пробуждаем спящие объекты при коллизии
+                if (aIsSleeping && rbA) {
+                    rbA->isSleeping = false;
+                    rbA->sleepTimer = 0.0f;
+                }
+                if (bIsSleeping && rbB) {
+                    rbB->isSleeping = false;
+                    rbB->sleepTimer = 0.0f;
+                }
+                
+                // ОГРАНИЧЕНИЕ ЧАСТОТЫ: Публикуем событие коллизии только каждую 5-ю коллизию
+                m_collisionCounter++;
+                if (m_collisionCounter % 5 == 0) {
+                    CollisionEvent event(entityA, entityB, info.normal, info.penetrationDepth, info.isTrigger);
+                    PUBLISH_EVENT(event);
+                }
             }
         }
     }
@@ -239,9 +321,9 @@ bool PhysicsSystem::CheckAABBSphereCollision(
     
     // Находим ближайшую точку на AABB к центру сферы
     XMFLOAT3 closestPoint;
-    closestPoint.x = std::max(aabb.min.x, std::min(sphereCenter.x, aabb.max.x));
-    closestPoint.y = std::max(aabb.min.y, std::min(sphereCenter.y, aabb.max.y));
-    closestPoint.z = std::max(aabb.min.z, std::min(sphereCenter.z, aabb.max.z));
+    closestPoint.x = (std::max)(aabb.min.x, (std::min)(sphereCenter.x, aabb.max.x));
+    closestPoint.y = (std::max)(aabb.min.y, (std::min)(sphereCenter.y, aabb.max.y));
+    closestPoint.z = (std::max)(aabb.min.z, (std::min)(sphereCenter.z, aabb.max.z));
     
     XMVECTOR closest = XMLoadFloat3(&closestPoint);
     XMVECTOR center = XMLoadFloat3(&sphereCenter);
@@ -304,9 +386,88 @@ void PhysicsSystem::ResolveCollision(World* world, const CollisionInfo& collisio
     XMVECTOR normal = XMLoadFloat3(&collision.normal);
     float depth = collision.penetrationDepth;
     
-    // Разделяем объекты
-    if (hasRbA && hasRbB) {
-        // Оба динамические - делим пополам
+    // ВАЖНО: Если проникновение слишком большое - это ошибка, пропускаем
+    if (depth > 2.0f) {
+        return;
+    }
+    
+    // Минимальная глубина для обработки
+    if (depth < 0.0001f) {
+        return;
+    }
+    
+    // Определяем, какой объект касается земли
+    auto* tagA = world->GetComponent<Tag>(collision.entityA);
+    auto* tagB = world->GetComponent<Tag>(collision.entityB);
+    
+    bool aIsGround = (tagA && tagA->name == "Ground");
+    bool bIsGround = (tagB && tagB->name == "Ground");
+    
+    // НОВАЯ ЛОГИКА: Обрабатываем коллизии с землей особым образом
+    if (hasRbA && bIsGround) {
+        // A динамический, B земля
+        XMVECTOR posA = XMLoadFloat3(&transformA->position);
+        
+        // КРИТИЧНО: Точно позиционируем объект НА поверхности земли
+        float groundY = transformB->position.y + (transformB->scale.y * 0.5f); // Верх земли
+        float objectHalfHeight = transformA->scale.y * 0.5f; // Половина высоты объекта
+        float targetY = groundY + objectHalfHeight; // Где должен быть центр объекта
+        
+        // Если объект проваливается в землю - ставим точно на поверхность
+        if (transformA->position.y < targetY + 0.01f) {
+            transformA->position.y = targetY;
+            
+            // Отмечаем контакт с землей
+            rbA->isGrounded = true;
+            rbA->groundContactTime += 0.016f; // ~60 FPS
+            
+            // СТАБИЛИЗАЦИЯ: Если объект на земле и движется медленно
+            if (rbA->groundContactTime > 0.1f && fabsf(rbA->velocity.y) < 1.0f) {
+                rbA->velocity.y = 0.0f; // Полностью останавливаем вертикальное движение
+                
+                // Если горизонтальная скорость тоже маленькая - сильно затухаем
+                if (sqrtf(rbA->velocity.x * rbA->velocity.x + rbA->velocity.z * rbA->velocity.z) < 0.5f) {
+                    rbA->velocity.x *= 0.5f;
+                    rbA->velocity.z *= 0.5f;
+                }
+            }
+            
+            // Применяем отскок только если скорость значительная
+            if (fabsf(rbA->velocity.y) > 0.5f) {
+                rbA->velocity.y = -rbA->velocity.y * rbA->restitution;
+            }
+        }
+    }
+    else if (hasRbB && aIsGround) {
+        // B динамический, A земля
+        XMVECTOR posB = XMLoadFloat3(&transformB->position);
+        
+        float groundY = transformA->position.y + (transformA->scale.y * 0.5f);
+        float objectHalfHeight = transformB->scale.y * 0.5f;
+        float targetY = groundY + objectHalfHeight;
+        
+        if (transformB->position.y < targetY + 0.01f) {
+            transformB->position.y = targetY;
+            
+            rbB->isGrounded = true;
+            rbB->groundContactTime += 0.016f;
+            
+            if (rbB->groundContactTime > 0.1f && fabsf(rbB->velocity.y) < 1.0f) {
+                rbB->velocity.y = 0.0f;
+                
+                if (sqrtf(rbB->velocity.x * rbB->velocity.x + rbB->velocity.z * rbB->velocity.z) < 0.5f) {
+                    rbB->velocity.x *= 0.5f;
+                    rbB->velocity.z *= 0.5f;
+                }
+            }
+            
+            if (fabsf(rbB->velocity.y) > 0.5f) {
+                rbB->velocity.y = -rbB->velocity.y * rbB->restitution;
+            }
+        }
+    }
+    else if (hasRbA && hasRbB) {
+        // Оба динамические - стандартная обработка
         float massA = rbA->mass;
         float massB = rbB->mass;
         float totalMass = massA + massB;
@@ -317,64 +478,53 @@ void PhysicsSystem::ResolveCollision(World* world, const CollisionInfo& collisio
         XMVECTOR posA = XMLoadFloat3(&transformA->position);
         XMVECTOR posB = XMLoadFloat3(&transformB->position);
         
-        posA = XMVectorSubtract(posA, XMVectorScale(normal, depth * ratioA));
-        posB = XMVectorAdd(posB, XMVectorScale(normal, depth * ratioB));
+        posA = XMVectorSubtract(posA, XMVectorScale(normal, depth * ratioA * 0.5f));
+        posB = XMVectorAdd(posB, XMVectorScale(normal, depth * ratioB * 0.5f));
         
         XMStoreFloat3(&transformA->position, posA);
         XMStoreFloat3(&transformB->position, posB);
         
-        // Применяем импульс (упругое столкновение)
+        // Применяем импульс
         XMVECTOR velA = XMLoadFloat3(&rbA->velocity);
         XMVECTOR velB = XMLoadFloat3(&rbB->velocity);
         XMVECTOR relativeVel = XMVectorSubtract(velA, velB);
         
         float velAlongNormal = XMVectorGetX(XMVector3Dot(relativeVel, normal));
         
-        if (velAlongNormal > 0) {
-            return; // Объекты расходятся
-        }
-        
-        float restitution = std::min(rbA->restitution, rbB->restitution);
-        float j = -(1.0f + restitution) * velAlongNormal;
-        j /= (1.0f / massA + 1.0f / massB);
-        
-        XMVECTOR impulse = XMVectorScale(normal, j);
-        
-        velA = XMVectorAdd(velA, XMVectorScale(impulse, 1.0f / massA));
-        velB = XMVectorSubtract(velB, XMVectorScale(impulse, 1.0f / massB));
-        
-        XMStoreFloat3(&rbA->velocity, velA);
-        XMStoreFloat3(&rbB->velocity, velB);
-    }
-    else if (hasRbA) {
-        // Только A динамический
-        XMVECTOR posA = XMLoadFloat3(&transformA->position);
-        posA = XMVectorSubtract(posA, XMVectorScale(normal, depth));
-        XMStoreFloat3(&transformA->position, posA);
-        
-        // Отражаем скорость
-        XMVECTOR velA = XMLoadFloat3(&rbA->velocity);
-        float velAlongNormal = XMVectorGetX(XMVector3Dot(velA, normal));
-        
         if (velAlongNormal < 0) {
-            velA = XMVectorSubtract(velA, XMVectorScale(normal, (1.0f + rbA->restitution) * velAlongNormal));
+            float restitution = (std::min)(rbA->restitution, rbB->restitution);
+            float j = -(1.0f + restitution) * velAlongNormal;
+            j /= (1.0f / massA + 1.0f / massB);
+            
+            XMVECTOR impulse = XMVectorScale(normal, j);
+            
+            velA = XMVectorAdd(velA, XMVectorScale(impulse, 1.0f / massA));
+            velB = XMVectorSubtract(velB, XMVectorScale(impulse, 1.0f / massB));
+            
             XMStoreFloat3(&rbA->velocity, velA);
+            XMStoreFloat3(&rbB->velocity, velB);
         }
     }
-    else {
-        // Только B динамический
-        XMVECTOR posB = XMLoadFloat3(&transformB->position);
-        posB = XMVectorAdd(posB, XMVectorScale(normal, depth));
-        XMStoreFloat3(&transformB->position, posB);
+}
+void PhysicsSystem::ResetGroundedStates(World* world) {
+    auto entities = world->GetEntitiesWith<Rigidbody>();
+    
+    for (Entity entity : entities) {
+        auto* rb = world->GetComponent<Rigidbody>(entity);
         
-        // Отражаем скорость
-        XMVECTOR velB = XMLoadFloat3(&rbB->velocity);
-        XMVECTOR invNormal = XMVectorNegate(normal);
-        float velAlongNormal = XMVectorGetX(XMVector3Dot(velB, invNormal));
+        if (!rb || rb->isKinematic) {
+            continue;
+        }
         
-        if (velAlongNormal < 0) {
-            velB = XMVectorSubtract(velB, XMVectorScale(invNormal, (1.0f + rbB->restitution) * velAlongNormal));
-            XMStoreFloat3(&rbB->velocity, velB);
+        // Сбрасываем состояние "на земле" - будет установлено заново при коллизии
+        if (!rb->isGrounded) {
+            rb->groundContactTime = 0.0f;
+        } else {
+            // Если объект был на земле, но теперь движется быстро - сбрасываем
+            if (fabsf(rb->velocity.y) > 1.0f) {
+                rb->isGrounded = false;
+                rb->groundContactTime = 0.0f;
+            }
         }
     }
 }
