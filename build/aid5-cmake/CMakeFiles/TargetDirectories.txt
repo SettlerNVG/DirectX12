@@ -1,0 +1,3 @@
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/aid5-cmake/CMakeFiles/AID5.1.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/aid5-cmake/CMakeFiles/ALL_BUILD.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/aid5-cmake/CMakeFiles/ZERO_CHECK.dir

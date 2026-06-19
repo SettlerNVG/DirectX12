@@ -1,0 +1,63 @@
+Package: vcpkg-cmake-config
+Version: 2024-05-23
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 5e7082181341926b5b11e53ef0d8692acf3f77d75db932dfbc7b7b9655785984
+Status: install ok installed
+
+Package: vcpkg-cmake
+Version: 2024-04-23
+Architecture: x64-windows
+Multi-Arch: same
+Abi: b9afa135c7d85eb3da9202b589bc7e9dfa3512115a55c864a141defcd5f7177f
+Status: install ok installed
+
+Package: imgui
+Version: 1.92.8
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: x64-windows
+Multi-Arch: same
+Abi: f83a555408df96c15f69b4514317ef35ab87a6960f95b4d017aad8c067e1dd4c
+Description: Bloat-free Immediate Mode Graphical User interface for C++ with minimal dependencies.
+Status: install ok installed
+
+Package: imgui
+Feature: docking-experimental
+Architecture: x64-windows
+Multi-Arch: same
+Description: Build with docking support
+Status: install ok installed
+
+Package: imgui
+Feature: dx12-binding
+Architecture: x64-windows
+Multi-Arch: same
+Description: Make available DirectX12 binding
+Status: install ok installed
+
+Package: imgui
+Feature: win32-binding
+Architecture: x64-windows
+Multi-Arch: same
+Description: Make available Win32 binding
+Status: install ok installed
+
+Package: imguizmo
+Version: 1.10
+Depends: imgui, vcpkg-cmake, vcpkg-cmake-config
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 35656258fd5dda6acc8b9a2f1433d6a539fccc27895e46e9d5a2b274d722a9bc
+Description: Immediate mode 3D gizmo for scene editing and other controls based on Dear ImGui
+Status: install ok installed
+
+Package: nlohmann-json
+Version: 3.12.0
+Port-Version: 2
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 4526e353d02deca661946799bd15034ef7f2c5e145e2400767546afd283bcb19
+Description: JSON for Modern C++
+Status: install ok installed
+

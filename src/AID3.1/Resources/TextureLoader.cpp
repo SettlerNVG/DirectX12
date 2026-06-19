@@ -18,16 +18,10 @@ std::shared_ptr<Texture> TextureLoader::Load(const std::string& path) {
     unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4); // Принудительно RGBA
     
     if (!data) {
-        LOG_WARNING("Failed to load texture with stb_image: " + path + " - using placeholder");
-        
-        // Создаем заглушку - белую текстуру 1x1
-        texture->SetDimensions(1, 1, 4);
-        std::vector<unsigned char> whitePixel = { 255, 255, 255, 255 };
-        texture->SetPixelData(whitePixel);
-        texture->SetLoaded(true);
-        
-        LOG_INFO("Texture loaded (placeholder): " + path);
-        return texture;
+        const char* reason = stbi_failure_reason();
+        LOG_ERROR("Failed to load texture with stb_image: " + path +
+                  (reason ? " - " + std::string(reason) : ""));
+        return nullptr;
     }
     
     // Успешная загрузка

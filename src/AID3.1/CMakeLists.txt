@@ -4,6 +4,8 @@ project(AID3.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(nlohmann_json CONFIG REQUIRED)
+
 # Source files
 set(SOURCES
     main.cpp
@@ -92,6 +94,7 @@ endif()
 
 # Link libraries (DirectX 12)
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    nlohmann_json::nlohmann_json
     d3d12.lib
     dxgi.lib
     d3dcompiler.lib

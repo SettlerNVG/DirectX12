@@ -1,0 +1,17 @@
+{
+  "name": "directx12-engine-labs",
+  "version": "1.0.0",
+  "dependencies": [
+    {
+      "name": "imgui",
+      "features": [
+        "dx12-binding",
+        "win32-binding",
+        "docking-experimental"
+      ]
+    },
+    "imguizmo",
+    "nlohmann-json"
+  ],
+  "builtin-baseline": "22d9c655dc24ad24c6cac27607005e619ce46740"
+}

@@ -1,0 +1,7 @@
+# CMake generation dependency list for this directory.
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/all-cmake/vcpkg_installed/x64-windows/share/nlohmann_json/nlohmann_jsonConfig.cmake
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/all-cmake/vcpkg_installed/x64-windows/share/nlohmann_json/nlohmann_jsonConfigVersion.cmake
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/all-cmake/vcpkg_installed/x64-windows/share/nlohmann_json/nlohmann_jsonTargets.cmake
+C:/Users/Nikita/Documents/GitHub/DirectX12/src/AID3.1/CMakeLists.txt
+C:/Users/Nikita/Documents/GitHub/DirectX12/vcpkg/downloads/tools/cmake-4.3.2-windows/cmake-4.3.2-windows-x86_64/share/cmake-4.3/Modules/FindPackageHandleStandardArgs.cmake
+C:/Users/Nikita/Documents/GitHub/DirectX12/vcpkg/downloads/tools/cmake-4.3.2-windows/cmake-4.3.2-windows-x86_64/share/cmake-4.3/Modules/FindPackageMessage.cmake

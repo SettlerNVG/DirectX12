@@ -102,6 +102,14 @@ target_link_libraries(${PROJECT_NAME}
     d3dcompiler.lib
 )
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    _WINDOWS
+    UNICODE
+    _UNICODE
+    $<$<CONFIG:Debug>:_DEBUG>
+    $<$<CONFIG:Release>:NDEBUG>
+)
+
 # Устанавливаем рабочую директорию для Visual Studio
 set_property(TARGET ${PROJECT_NAME} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 

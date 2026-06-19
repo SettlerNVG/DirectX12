@@ -74,7 +74,7 @@ void GameplayState::LoadResources() {
         LOG_ERROR("Failed to load car mesh");
     }
     
-    // Загружаем текстуры (пока заглушки)
+    // Загружаем текстуру из файла через ResourceManager
     auto defaultTexture = resourceManager.LoadTexture("assets/default.png");
     if (defaultTexture) {
         LOG_INFO("Default texture loaded");
@@ -84,7 +84,7 @@ void GameplayState::LoadResources() {
         }
     }
     
-    // Загружаем шейдер (пока заглушка)
+    // Загружаем шейдер из файла через ResourceManager
     auto basicShader = resourceManager.LoadShader("assets/basic.hlsl");
     if (basicShader) {
         LOG_INFO("Basic shader loaded");

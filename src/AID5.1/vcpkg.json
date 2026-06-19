@@ -1,0 +1,17 @@
+{
+  "name": "aid5-1-editor",
+  "version": "1.0.0",
+  "description": "AID5.1 WYSIWYG Editor with Dear ImGui",
+  "dependencies": [
+    {
+      "name": "imgui",
+      "features": [
+        "dx12-binding",
+        "win32-binding",
+        "docking-experimental"
+      ]
+    },
+    "imguizmo"
+  ],
+  "builtin-baseline": "22d9c655dc24ad24c6cac27607005e619ce46740"
+}

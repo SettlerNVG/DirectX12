@@ -1,0 +1,12 @@
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/CMakeFiles/ALL_BUILD.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/CMakeFiles/ZERO_CHECK.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID1.1/CMakeFiles/AID1.1.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID1.1/CMakeFiles/ALL_BUILD.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID2.1/CMakeFiles/AID2.1.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID2.1/CMakeFiles/ALL_BUILD.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID3.1/CMakeFiles/AID3.1.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID3.1/CMakeFiles/ALL_BUILD.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID4.1/CMakeFiles/AID4.1.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID4.1/CMakeFiles/ALL_BUILD.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID5.1/CMakeFiles/AID5.1.dir
+C:/Users/Nikita/Documents/GitHub/DirectX12/build/legacy-cmake/src/AID5.1/CMakeFiles/ALL_BUILD.dir
