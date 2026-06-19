@@ -39,8 +39,8 @@ public:
     bool IsPlayMode() const { return m_isPlayMode; }
     void SetPlayMode(bool playMode) { m_isPlayMode = playMode; }
     bool HasViewportRect() const { return m_viewportWidth > 1.0f && m_viewportHeight > 1.0f; }
-    float GetViewportX() const { return m_viewportX; }
-    float GetViewportY() const { return m_viewportY; }
+    float GetViewportX() const { return m_viewportRenderX; }
+    float GetViewportY() const { return m_viewportRenderY; }
     float GetViewportWidth() const { return m_viewportWidth; }
     float GetViewportHeight() const { return m_viewportHeight; }
     float GetViewportAspectRatio() const { return HasViewportRect() ? (m_viewportWidth / m_viewportHeight) : (800.0f / 600.0f); }
@@ -123,6 +123,8 @@ private:
     float m_viewportY;
     float m_viewportWidth;
     float m_viewportHeight;
+    float m_viewportRenderX;
+    float m_viewportRenderY;
     
     int m_renderedObjects;
     int m_activeCollisions;

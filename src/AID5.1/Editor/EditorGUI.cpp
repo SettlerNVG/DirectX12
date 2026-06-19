@@ -16,6 +16,7 @@
 
 // Dear ImGui
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx12.h>
 
@@ -55,6 +56,8 @@ EditorGUI::EditorGUI()
     , m_viewportY(0.0f)
     , m_viewportWidth(0.0f)
     , m_viewportHeight(0.0f)
+    , m_viewportRenderX(0.0f)
+    , m_viewportRenderY(0.0f)
     , m_renderedObjects(0)
     , m_activeCollisions(0)
     , m_estimatedResourceBytes(0)
@@ -426,7 +429,8 @@ void EditorGUI::CreateDockSpace() {
     static bool dockspaceOpen = true;
     static bool opt_fullscreen_persistant = true;
     bool opt_fullscreen = opt_fullscreen_persistant;
-    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
+    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_PassthruCentralNode | ImGuiDockNodeFlags_NoDockingOverCentralNode;
+    static bool dockLayoutBuilt = false;
 
     // Мы используем ImGuiWindowFlags_NoDocking чтобы сделать родительское окно не dockable
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
@@ -447,6 +451,7 @@ void EditorGUI::CreateDockSpace() {
 
     // Важно: обратите внимание, что мы продолжаем использовать ImGuiWindowFlags_NoMove даже когда opt_fullscreen == false.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.0f);
     ImGui::Begin("DockSpace Demo", &dockspaceOpen, window_flags);
     ImGui::PopStyleVar();
 
@@ -458,6 +463,45 @@ void EditorGUI::CreateDockSpace() {
     if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
         ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
+
+        if (!dockLayoutBuilt) {
+            dockLayoutBuilt = true;
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+            ImGui::DockBuilderRemoveNode(dockspace_id);
+            ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace | dockspace_flags);
+            ImGui::DockBuilderSetNodePos(dockspace_id, viewport->Pos);
+            ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
+
+            ImGuiID dockMain = dockspace_id;
+            ImGuiID dockLeft = 0;
+            ImGuiID dockRight = 0;
+            ImGuiID dockBottom = 0;
+            ImGuiID dockTop = 0;
+
+            ImGui::DockBuilderSplitNode(dockMain, ImGuiDir_Left, 0.22f, &dockLeft, &dockMain);
+            ImGui::DockBuilderSplitNode(dockMain, ImGuiDir_Right, 0.25f, &dockRight, &dockMain);
+            ImGui::DockBuilderSplitNode(dockMain, ImGuiDir_Down, 0.24f, &dockBottom, &dockMain);
+            ImGui::DockBuilderSplitNode(dockMain, ImGuiDir_Up, 0.12f, &dockTop, &dockMain);
+
+            ImGui::DockBuilderDockWindow("Scene Hierarchy", dockLeft);
+            ImGui::DockBuilderDockWindow("Inspector", dockRight);
+            ImGui::DockBuilderDockWindow("Statistics", dockBottom);
+            ImGui::DockBuilderDockWindow("Asset Browser", dockBottom);
+            ImGui::DockBuilderDockWindow("Console", dockBottom);
+            ImGui::DockBuilderDockWindow("Toolbar", dockTop);
+            ImGui::DockBuilderFinish(dockspace_id);
+        }
+
+        if (ImGuiDockNode* centralNode = ImGui::DockBuilderGetCentralNode(dockspace_id)) {
+            ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+            m_viewportX = centralNode->Pos.x;
+            m_viewportY = centralNode->Pos.y;
+            m_viewportWidth = centralNode->Size.x;
+            m_viewportHeight = centralNode->Size.y;
+            m_viewportRenderX = m_viewportX - mainViewport->Pos.x;
+            m_viewportRenderY = m_viewportY - mainViewport->Pos.y;
+        }
     }
 
     ImGui::End();
@@ -688,34 +732,27 @@ void EditorGUI::CreateInspector(World* world) {
 
 
 void EditorGUI::CreateViewport(World* world) {
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.02f, 0.025f, 0.08f));
-    if (ImGui::Begin("Viewport", &m_showViewport, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-        m_viewportFocused = ImGui::IsWindowFocused();
-        m_viewportHovered = ImGui::IsWindowHovered();
-
-        ImVec2 viewportPos = ImGui::GetCursorScreenPos();
-        ImVec2 viewportSize = ImGui::GetContentRegionAvail();
-        viewportSize.x = (std::max)(viewportSize.x, 1.0f);
-        viewportSize.y = (std::max)(viewportSize.y, 1.0f);
-
-        m_viewportX = viewportPos.x;
-        m_viewportY = viewportPos.y;
-        m_viewportWidth = viewportSize.x;
-        m_viewportHeight = viewportSize.y;
-
-        ImGui::InvisibleButton("SceneViewportCanvas", viewportSize, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
-
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        const ImU32 borderColor = IM_COL32(90, 130, 190, m_viewportFocused ? 220 : 120);
-        drawList->AddRect(viewportPos, ImVec2(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y), borderColor);
-        drawList->AddText(ImVec2(viewportPos.x + 10.0f, viewportPos.y + 8.0f), IM_COL32(220, 230, 240, 210), m_isPlayMode ? "PLAY" : "EDIT");
-
-        if (m_hasSelectedEntity && world && world->IsEntityValid(m_selectedEntity)) {
-            DrawGizmo(world, m_selectedEntity);
-        }
+    if (!HasViewportRect()) {
+        return;
     }
-    ImGui::End();
-    ImGui::PopStyleColor();
+
+    ImVec2 viewportPos(m_viewportX, m_viewportY);
+    ImVec2 viewportSize(m_viewportWidth, m_viewportHeight);
+    ImVec2 viewportEnd(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y);
+    ImVec2 mousePos = ImGui::GetIO().MousePos;
+
+    m_viewportHovered = mousePos.x >= viewportPos.x && mousePos.x <= viewportEnd.x &&
+                        mousePos.y >= viewportPos.y && mousePos.y <= viewportEnd.y;
+    m_viewportFocused = m_viewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+    const ImU32 borderColor = IM_COL32(90, 130, 190, m_viewportFocused ? 230 : 150);
+    drawList->AddRect(viewportPos, viewportEnd, borderColor, 0.0f, 0, 1.0f);
+    drawList->AddText(ImVec2(viewportPos.x + 10.0f, viewportPos.y + 8.0f), IM_COL32(220, 230, 240, 210), m_isPlayMode ? "PLAY" : "EDIT");
+
+    if (m_hasSelectedEntity && world && world->IsEntityValid(m_selectedEntity)) {
+        DrawGizmo(world, m_selectedEntity);
+    }
 }
 
 void EditorGUI::CreateStatistics(World* world, float deltaTime) {
@@ -997,7 +1034,7 @@ void EditorGUI::DrawGizmo(World* world, uint32_t entity) {
     XMStoreFloat4x4(&object, objectMatrix);
 
     ImGuizmo::SetOrthographic(false);
-    ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+    ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList(ImGui::GetMainViewport()));
     ImGuizmo::SetRect(m_viewportX, m_viewportY, m_viewportWidth, m_viewportHeight);
 
     ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;

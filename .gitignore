@@ -1,4 +1,6 @@
 # Build directories
+build/
+vcpkg/
 x64/
 Debug/
 Release/

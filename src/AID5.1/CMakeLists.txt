@@ -10,6 +10,11 @@ project(AID5.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(AID51_VENDORED_VCPKG_PREFIX "${CMAKE_CURRENT_LIST_DIR}/vcpkg_installed/x64-windows/x64-windows")
+if(EXISTS "${AID51_VENDORED_VCPKG_PREFIX}/share/imgui/imgui-config.cmake")
+    list(PREPEND CMAKE_PREFIX_PATH "${AID51_VENDORED_VCPKG_PREFIX}")
+endif()
+
 # Поиск пакетов vcpkg
 find_package(imgui CONFIG REQUIRED)
 find_package(imguizmo CONFIG REQUIRED)
@@ -114,6 +119,13 @@ set(HEADERS
 
 # Создаём исполняемый файл (WIN32 для Windows приложения)
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
+
+if(MSVC)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        VS_GLOBAL_VcpkgEnabled false
+        VS_GLOBAL_VcpkgEnableManifest false
+    )
+endif()
 
 # Линкуем DirectX 12 библиотеки и vcpkg пакеты
 target_link_libraries(${PROJECT_NAME}
